@@ -3,3 +3,7 @@ dist/
 .env
 .env.local
 .DS_Store
+
+# This project uses bun; bun.lock is the canonical lockfile.
+# An npm run here would otherwise add a second, competing lockfile.
+package-lock.json
