@@ -9,6 +9,7 @@ import {
   screenToDocument,
   zoomByFactor,
 } from '../../lib/camera';
+import { panToCentre } from '../../lib/overlayPlacement';
 import { ElementAction, actionsFor, findNode } from '../../lib/documentTree';
 import { DesignTokens, NodeElement, ViewportDevice } from '../../types/document';
 import { DocumentFrame } from '../../render/DocumentFrame';
@@ -79,9 +80,19 @@ export const CanvasViewport: React.FC<CanvasViewportProps> = ({
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [selectedRect, setSelectedRect] = useState<Rect | null>(null);
   const [hoveredRect, setHoveredRect] = useState<Rect | null>(null);
+  /** Bumped when the frame is (re)attached, so rects are measured again. */
+  const [frameEpoch, setFrameEpoch] = useState(0);
 
   const documentWidth = VIEWPORT_WIDTHS[device];
   const documentSize = { width: documentWidth, height: contentHeight };
+
+  // Stable identity: an inline arrow here would change every render, making
+  // DocumentFrame re-run its ref callback, re-initialise the document and add
+  // another load listener on each pan, zoom or hover.
+  const handleFrameReady = useCallback((frame: HTMLIFrameElement | null) => {
+    frameRef.current = frame;
+    setFrameEpoch((n) => n + 1);
+  }, []);
 
   const { panning, onPointerDown, cursor } = useCanvasGestures({
     camera,
@@ -166,7 +177,7 @@ export const CanvasViewport: React.FC<CanvasViewportProps> = ({
 
   useEffect(() => {
     syncRects();
-  }, [syncRects, root, device, contentHeight]);
+  }, [syncRects, root, device, contentHeight, frameEpoch]);
 
   // A style edit can change geometry without changing the document identity, so
   // re-measure on a timer rather than per render. 120ms is below the threshold
@@ -255,6 +266,13 @@ export const CanvasViewport: React.FC<CanvasViewportProps> = ({
   const selectedNode = selectedElementId ? findNode(root, selectedElementId) : null;
   const hoveredNode = hoveredId ? findNode(root, hoveredId) : null;
 
+  /** Brings an off-screen selection back into view without changing zoom. */
+  const handleRevealSelection = useCallback(() => {
+    if (!selectedRect) return;
+    const size = viewportSize();
+    onCameraChange({ ...camera, ...panToCentre(selectedRect, size, camera.zoom) });
+  }, [selectedRect, viewportSize, camera, onCameraChange]);
+
   return (
     <div className="relative flex-1 min-h-0 w-full bg-[#ECE8DF] overflow-hidden">
       {/* Gesture + hit-test surface. The iframe below is pointer-inert. */}
@@ -289,10 +307,7 @@ export const CanvasViewport: React.FC<CanvasViewportProps> = ({
               device={device}
               height={contentHeight}
               onContentHeightChange={setContentHeight}
-              onFrameReady={(frame) => {
-                frameRef.current = frame;
-                syncRects();
-              }}
+              onFrameReady={handleFrameReady}
             />
           </div>
         </div>
@@ -310,6 +325,9 @@ export const CanvasViewport: React.FC<CanvasViewportProps> = ({
             onChooseAction(null);
             onSelectElement(null);
           }}
+          onRevealSelection={handleRevealSelection}
+          // Keep tools clear of the floating zoom bar and the command dock.
+          insets={{ top: 8, right: 8, bottom: 96, left: 8 }}
         />
       </div>
 

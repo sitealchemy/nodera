@@ -17,15 +17,35 @@ export class StorageService {
   /**
    * Explicit, versioned migration.
    *
-   * v1 -> v2 added per-breakpoint optical offsets, which is purely additive:
-   * a v1 document is already valid v2, so migration only stamps the version.
-   * No stored document is silently rewritten. Any future non-additive change
-   * gets its own branch here.
+   * v1 -> v2 added per-breakpoint optical offsets. Purely additive: a v1
+   *          document is already valid v2, so nothing is rewritten.
+   * v2 -> v3 gave every direction its own design tokens. Previously all
+   *          directions read one shared object, so recolouring one repainted
+   *          the others. Each direction is seeded with a copy of the project's
+   *          tokens, which preserves exactly how the document looked before —
+   *          the directions only diverge from the next edit onwards.
    */
   static migrateProject(project: ProjectState): ProjectState {
     const version = project.schemaVersion ?? 1;
     if (version >= CURRENT_SCHEMA_VERSION) return project;
-    return { ...project, schemaVersion: CURRENT_SCHEMA_VERSION };
+
+    const migrated: ProjectState = JSON.parse(JSON.stringify(project));
+
+    if (version < 3) {
+      Object.values(migrated.directions ?? {}).forEach((direction) => {
+        if (!direction.tokens) {
+          direction.tokens = JSON.parse(JSON.stringify(migrated.tokens));
+        }
+      });
+    }
+
+    migrated.schemaVersion = CURRENT_SCHEMA_VERSION;
+    return migrated;
+  }
+
+  /** Tokens that apply right now: the active direction's, falling back to the project's. */
+  static activeTokens(project: ProjectState) {
+    return project.directions[project.activeDirectionId]?.tokens ?? project.tokens;
   }
 
   static loadProject(): ProjectState {
@@ -66,7 +86,9 @@ export class StorageService {
       commentsCount: project.comments.length,
       snapshotData: {
         pages: JSON.parse(JSON.stringify(activeDir.pages)),
-        tokens: JSON.parse(JSON.stringify(project.tokens))
+        // The direction's own tokens, so a snapshot keeps the look it was
+        // taken with even after that direction is recoloured later.
+        tokens: JSON.parse(JSON.stringify(activeDir.tokens ?? project.tokens))
       }
     };
   }
@@ -94,6 +116,7 @@ export class StorageService {
   static generateExportHtml(project: ProjectState, pageSlug: string): string {
     const dir = project.directions[project.activeDirectionId];
     const page = dir.pages[pageSlug] || Object.values(dir.pages)[0];
+    const tokens = StorageService.activeTokens(project);
 
     const escapeAttr = (value: string): string =>
       value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -137,8 +160,8 @@ export class StorageService {
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     body {
-      background-color: ${project.tokens.surfaceColor};
-      color: ${project.tokens.textColor};
+      background-color: ${tokens.surfaceColor};
+      color: ${tokens.textColor};
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       margin: 0;
       padding: 0;

@@ -218,6 +218,9 @@ export const ProposalView: React.FC<ProposalViewProps> = ({
             device="desktop"
             height={snapshotHeight}
             onContentHeightChange={setSnapshotHeight}
+            // Same link handling as the editor: a snapshot is for reading and
+            // commenting, so nothing navigates out of it.
+            knownSlugs={Object.keys(pages)}
             style={{ width: '100%' }}
           />
         </div>

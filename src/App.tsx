@@ -1,21 +1,26 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import {
   DesignTokens,
   ElementStyles,
   NodeElement,
   OpticalOffset,
-  ProjectAssumption,
   ProjectState,
   ProposalComment,
   ResponsiveScope,
   ViewportDevice,
-  WorkScope,
 } from './types/document';
 import { StorageService } from './services/storage';
-import { AIAdapter, AICommandContext } from './services/aiAdapter';
+import { AIAdapter, AICommandContext, AIExecutionResult } from './services/aiAdapter';
 import { INITIAL_SPLOT_PROJECT } from './data/splotDemo';
 import { Camera, IDENTITY_CAMERA } from './lib/camera';
 import { ElementAction, findNode, navigateFrom, nodeExists } from './lib/documentTree';
+import {
+  canRedo as canRedoOf,
+  canUndo as canUndoOf,
+  createDocumentState,
+  documentReducer,
+} from './lib/history';
+import { LinkTarget } from './lib/links';
 import { resolveOpticalOffset } from './render/resolveStyles';
 
 import { EditorHeader } from './components/Editor/EditorHeader';
@@ -41,13 +46,32 @@ function isTextEntryTarget(target: EventTarget | null): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
 }
 
+/**
+ * Elements whose own keyboard behaviour must not be hijacked.
+ *
+ * Space activates a focused button and Enter activates a focused link; a
+ * global handler that swallows those breaks keyboard operation of the whole
+ * interface, not just the canvas.
+ */
+function isInteractiveTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el?.closest) return false;
+  return !!el.closest('button, a, [role="button"], [role="menuitem"], summary');
+}
+
 export const App: React.FC = () => {
   const [screen, setScreen] = useState<Screen>('editor');
 
   // --- Document state (undoable) ------------------------------------------
-  const [project, setProject] = useState<ProjectState>(() => StorageService.loadProject());
-  const [historyStack, setHistoryStack] = useState<ProjectState[]>([]);
-  const [futureStack, setFutureStack] = useState<ProjectState[]>([]);
+  // One reducer holds project + past + future so every transition is pure and
+  // atomic. Nested setState updaters with side effects double-fired under
+  // StrictMode and pushed two history entries per edit.
+  const [doc, dispatch] = useReducer(
+    documentReducer,
+    undefined,
+    () => createDocumentState(StorageService.loadProject()),
+  );
+  const project = doc.project;
 
   // --- UI state (never undoable, never persisted into the document) -------
   const [camera, setCamera] = useState<Camera>(IDENTITY_CAMERA);
@@ -58,12 +82,14 @@ export const App: React.FC = () => {
   const [handTool, setHandTool] = useState(false);
   const [viewportDevice, setViewportDevice] = useState<ViewportDevice>('desktop');
   const [responsiveScope, setResponsiveScope] = useState<ResponsiveScope>('all');
-  const [workScope] = useState<WorkScope>('all');
+  const [pendingAnchor, setPendingAnchor] = useState<string | null>(null);
 
   const [isProposalOpen, setIsProposalOpen] = useState(false);
   const [isPublishChecklistOpen, setIsPublishChecklistOpen] = useState(false);
   const [isCodeExportOpen, setIsCodeExportOpen] = useState(false);
   const [feedback, setFeedback] = useState<CommandFeedback | null>(null);
+
+  const isModalOpen = isProposalOpen || isPublishChecklistOpen || isCodeExportOpen;
 
   // Persist the document only. Camera, drawers and selection are session UI.
   useEffect(() => {
@@ -74,6 +100,10 @@ export const App: React.FC = () => {
   const pages = useMemo(() => Object.values(activeDirection.pages), [activeDirection]);
   const activePage = activeDirection.pages[project.activePageSlug] ?? pages[0];
   const selectedNode = selectedElementId ? findNode(activePage.root, selectedElementId) : null;
+  const pageSlugs = useMemo(() => pages.map((page) => page.slug), [pages]);
+
+  /** The tokens that apply right now: this direction's own. */
+  const activeTokens = activeDirection.tokens ?? project.tokens;
 
   // A selection that no longer exists (page or direction changed) is dropped
   // rather than left pointing at a stale id.
@@ -86,36 +116,11 @@ export const App: React.FC = () => {
 
   // --- Document mutation ---------------------------------------------------
   const commitProjectUpdate = useCallback((next: ProjectState) => {
-    setProject((current) => {
-      setHistoryStack((stack) => [...stack.slice(-24), JSON.parse(JSON.stringify(current))]);
-      setFutureStack([]);
-      return next;
-    });
+    dispatch({ type: 'commit', next });
   }, []);
 
-  const handleUndo = useCallback(() => {
-    setHistoryStack((stack) => {
-      if (stack.length === 0) return stack;
-      const previous = stack[stack.length - 1];
-      setProject((current) => {
-        setFutureStack((future) => [JSON.parse(JSON.stringify(current)), ...future]);
-        return previous;
-      });
-      return stack.slice(0, -1);
-    });
-  }, []);
-
-  const handleRedo = useCallback(() => {
-    setFutureStack((future) => {
-      if (future.length === 0) return future;
-      const next = future[0];
-      setProject((current) => {
-        setHistoryStack((stack) => [...stack, JSON.parse(JSON.stringify(current))]);
-        return next;
-      });
-      return future.slice(1);
-    });
-  }, []);
+  const handleUndo = useCallback(() => dispatch({ type: 'undo' }), []);
+  const handleRedo = useCallback(() => dispatch({ type: 'redo' }), []);
 
   /** Clone the project and hand the caller the selected node inside the clone. */
   const mutateSelectedNode = useCallback(
@@ -144,8 +149,7 @@ export const App: React.FC = () => {
    * Writes a style edit to the scope the UI is showing.
    *
    * Previously only `mobile` was handled, so choosing "tablet" silently wrote a
-   * global style while the inspector claimed the edit was local. Both scopes
-   * now route to their own override bucket.
+   * global style while the inspector claimed the edit was local.
    */
   const handleUpdateElementStyles = useCallback(
     (styles: Partial<ElementStyles>) => {
@@ -164,13 +168,7 @@ export const App: React.FC = () => {
     [mutateSelectedNode, responsiveScope],
   );
 
-  /**
-   * Optical offset, also scope-aware.
-   *
-   * The offset used to be a single value regardless of scope, so a nudge made
-   * while editing mobile silently moved every breakpoint. Per-scope offsets
-   * live in `opticalOffsets`; `opticalOffset` remains the shared value.
-   */
+  /** Optical offset, also scope-aware. */
   const applyNudge = useCallback(
     (nodeId: string, dx: number, dy: number) => {
       const draft: ProjectState = JSON.parse(JSON.stringify(project));
@@ -202,59 +200,134 @@ export const App: React.FC = () => {
     });
   }, [mutateSelectedNode, responsiveScope]);
 
+  /**
+   * Token edits apply to the ACTIVE DIRECTION only.
+   *
+   * This used to walk `Object.values(draft.directions)` and repaint every
+   * page of every direction, so trying one accent colour destroyed the other
+   * two concepts. Each direction now owns its token object.
+   */
   const handleUpdateTokens = useCallback(
     (delta: Partial<DesignTokens>) => {
       const draft: ProjectState = JSON.parse(JSON.stringify(project));
-      draft.tokens = { ...draft.tokens, ...delta };
+      const direction = draft.directions[draft.activeDirectionId];
+      const nextTokens = { ...(direction.tokens ?? draft.tokens), ...delta };
+      direction.tokens = nextTokens;
+      // Mirrored for components that read the project-level field.
+      draft.tokens = nextTokens;
+
+      const paintButtons = (apply: (node: NodeElement) => void) => {
+        Object.values(direction.pages).forEach((page) => {
+          const walk = (node: NodeElement) => {
+            if (node.tag === 'button' || node.tokenRef === 'buttonPrimary') apply(node);
+            node.children?.forEach(walk);
+          };
+          walk(page.root);
+        });
+      };
 
       if (delta.accentCopper) {
-        Object.values(draft.directions).forEach((dir) => {
-          Object.values(dir.pages).forEach((page) => {
-            const walk = (node: NodeElement) => {
-              if (node.tag === 'button' || node.tokenRef === 'buttonPrimary') {
-                node.styles.backgroundColor = delta.accentCopper;
-              }
-              node.children?.forEach(walk);
-            };
-            walk(page.root);
-          });
+        paintButtons((node) => {
+          node.styles.backgroundColor = delta.accentCopper;
         });
       }
       if (delta.buttonRadius) {
-        Object.values(draft.directions).forEach((dir) => {
-          Object.values(dir.pages).forEach((page) => {
-            const walk = (node: NodeElement) => {
-              if (node.tag === 'button' || node.tokenRef === 'buttonPrimary') {
-                node.styles.borderRadius = delta.buttonRadius;
-              }
-              node.children?.forEach(walk);
-            };
-            walk(page.root);
-          });
+        paintButtons((node) => {
+          node.styles.borderRadius = delta.buttonRadius;
         });
       }
+
       commitProjectUpdate(draft);
     },
     [project, commitProjectUpdate],
   );
 
+  /** Switching direction also restores that direction's own look. */
+  const handleSelectDirection = useCallback(
+    (directionId: string) => {
+      const draft: ProjectState = JSON.parse(JSON.stringify(project));
+      draft.activeDirectionId = directionId;
+      const direction = draft.directions[directionId];
+      if (direction?.tokens) draft.tokens = JSON.parse(JSON.stringify(direction.tokens));
+      // Keep the current page if the new direction has it.
+      if (!direction.pages[draft.activePageSlug]) {
+        draft.activePageSlug = Object.keys(direction.pages)[0];
+      }
+      setSelectedElementId(null);
+      setActiveAction(null);
+      dispatch({ type: 'navigate', next: draft });
+    },
+    [project],
+  );
+
+  const handleSelectPage = useCallback(
+    (slug: string) => {
+      if (slug === project.activePageSlug) return;
+      const draft: ProjectState = JSON.parse(JSON.stringify(project));
+      draft.activePageSlug = slug;
+      setSelectedElementId(null);
+      setActiveAction(null);
+      dispatch({ type: 'navigate', next: draft });
+    },
+    [project],
+  );
+
+  /** Navigation coming from a link inside the rendered document. */
+  const handleDocumentNavigate = useCallback(
+    (target: LinkTarget) => {
+      switch (target.kind) {
+        case 'page':
+          handleSelectPage(target.slug);
+          setPendingAnchor(target.hash);
+          break;
+        case 'anchor':
+          setPendingAnchor(target.hash);
+          break;
+        case 'external':
+          // Opened deliberately, in a new context, with the opener severed.
+          window.open(target.href, '_blank', 'noopener,noreferrer');
+          break;
+        default:
+          break;
+      }
+    },
+    [handleSelectPage],
+  );
+
   const handleExecuteAICommand = useCallback(
-    (prompt: string) => {
+    (prompt: string): AIExecutionResult => {
       const context: AICommandContext = {
         projectName: project.name,
         directionName: activeDirection.name,
         pageSlug: project.activePageSlug,
         selectedElementId,
         selectedElementName: selectedNode?.name ?? null,
-        actionType: 'none',
+        // The action the user actually has open, not a hardcoded 'none'.
+        actionType: activeAction ?? 'none',
         responsiveScope,
       };
       const result = AIAdapter.executeCommand(prompt, context, project);
-      if (!result.success) return;
-      commitProjectUpdate(result.updatedProject);
-      setFeedback({ summary: result.summary, steps: result.detailedSteps });
+
+      // Only a real change touches the document or the history.
+      if (result.kind === 'applied' && result.updatedProject) {
+        commitProjectUpdate(result.updatedProject);
+      }
+      setFeedback({
+        kind: result.kind,
+        summary: result.summary,
+        steps: result.detailedSteps,
+      });
+      return result;
     },
-    [project, activeDirection, selectedElementId, selectedNode, responsiveScope, commitProjectUpdate],
+    [
+      project,
+      activeDirection,
+      selectedElementId,
+      selectedNode,
+      responsiveScope,
+      activeAction,
+      commitProjectUpdate,
+    ],
   );
 
   const handleAddComment = useCallback(
@@ -276,8 +349,6 @@ export const App: React.FC = () => {
   );
 
   // --- Keyboard ------------------------------------------------------------
-  // Escape closes the action first, then the selection. Arrows either nudge
-  // (position action) or walk the document structure.
   const selectedIdRef = useRef(selectedElementId);
   selectedIdRef.current = selectedElementId;
 
@@ -285,6 +356,9 @@ export const App: React.FC = () => {
     if (screen !== 'editor') return;
 
     const onKeyDown = (event: KeyboardEvent) => {
+      // A modal owns the keyboard while it is open: editor shortcuts must not
+      // reach through and modify the page behind it.
+      if (isModalOpen) return;
       if (isTextEntryTarget(event.target)) return;
 
       const mod = event.metaKey || event.ctrlKey;
@@ -319,14 +393,12 @@ export const App: React.FC = () => {
       const direction = arrows[event.key];
       if (!direction) return;
 
+      // Arrow keys move focus inside menus and toolbars; leave those alone.
+      if (isInteractiveTarget(event.target)) return;
+
       event.preventDefault();
       if (activeAction === 'position') {
-        const delta = {
-          up: [0, -1],
-          down: [0, 1],
-          left: [-1, 0],
-          right: [1, 0],
-        }[direction];
+        const delta = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] }[direction];
         applyNudge(id, delta[0], delta[1]);
       } else {
         const next = navigateFrom(activePage.root, id, direction);
@@ -336,7 +408,16 @@ export const App: React.FC = () => {
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [screen, activeAction, openDrawer, activePage, applyNudge, handleUndo, handleRedo]);
+  }, [
+    screen,
+    isModalOpen,
+    activeAction,
+    openDrawer,
+    activePage,
+    applyNudge,
+    handleUndo,
+    handleRedo,
+  ]);
 
   // --- Routing -------------------------------------------------------------
   if (screen === 'intake') {
@@ -344,7 +425,7 @@ export const App: React.FC = () => {
       <IntakeView
         onGenerateDirections={() => setScreen('directions')}
         onLoadDemoProject={() => {
-          setProject(INITIAL_SPLOT_PROJECT);
+          dispatch({ type: 'reset', next: StorageService.migrateProject(INITIAL_SPLOT_PROJECT) });
           setScreen('editor');
         }}
       />
@@ -357,9 +438,7 @@ export const App: React.FC = () => {
         directions={project.directions}
         activeDirectionId={project.activeDirectionId}
         onSelectDirectionAndOpenEditor={(dirId) => {
-          setProject((prev) => ({ ...prev, activeDirectionId: dirId }));
-          setSelectedElementId(null);
-          setActiveAction(null);
+          handleSelectDirection(dirId);
           setScreen('editor');
         }}
         onBackToIntake={() => setScreen('intake')}
@@ -372,11 +451,14 @@ export const App: React.FC = () => {
       <PreviewView
         pages={pages}
         activePageSlug={project.activePageSlug}
-        onSelectPage={(slug) => setProject((prev) => ({ ...prev, activePageSlug: slug }))}
-        tokens={project.tokens}
+        onSelectPage={handleSelectPage}
+        tokens={activeTokens}
         device={viewportDevice}
         onSelectDevice={setViewportDevice}
         onBackToEditor={() => setScreen('editor')}
+        onNavigate={handleDocumentNavigate}
+        pendingAnchor={pendingAnchor}
+        onAnchorConsumed={() => setPendingAnchor(null)}
       />
     );
   }
@@ -391,19 +473,15 @@ export const App: React.FC = () => {
         projectName={project.name}
         pages={pages}
         activePageSlug={project.activePageSlug}
-        onSelectPage={(slug) => {
-          setProject((prev) => ({ ...prev, activePageSlug: slug }));
-          setSelectedElementId(null);
-          setActiveAction(null);
-        }}
+        onSelectPage={handleSelectPage}
         directions={project.directions}
         activeDirectionId={project.activeDirectionId}
         viewportDevice={viewportDevice}
         onSelectViewport={setViewportDevice}
         responsiveScope={responsiveScope}
         onSelectResponsiveScope={setResponsiveScope}
-        canUndo={historyStack.length > 0}
-        canRedo={futureStack.length > 0}
+        canUndo={canUndoOf(doc)}
+        canRedo={canRedoOf(doc)}
         onUndo={handleUndo}
         onRedo={handleRedo}
         onOpenPreview={() => setScreen('preview')}
@@ -420,22 +498,14 @@ export const App: React.FC = () => {
           onCloseDrawer={() => setOpenDrawer(null)}
           pages={pages}
           activePageSlug={project.activePageSlug}
-          onSelectPage={(slug) => {
-            setProject((prev) => ({ ...prev, activePageSlug: slug }));
-            setSelectedElementId(null);
-            setActiveAction(null);
-          }}
+          onSelectPage={handleSelectPage}
           directions={project.directions}
           activeDirectionId={project.activeDirectionId}
-          onSelectDirection={(id) => {
-            setProject((prev) => ({ ...prev, activeDirectionId: id }));
-            setSelectedElementId(null);
-            setActiveAction(null);
-          }}
+          onSelectDirection={handleSelectDirection}
           rootElement={activePage.root}
           selectedElementId={selectedElementId}
           onSelectElement={setSelectedElementId}
-          tokens={project.tokens}
+          tokens={activeTokens}
           onUpdateTokens={handleUpdateTokens}
         />
 
@@ -445,7 +515,7 @@ export const App: React.FC = () => {
         <div className="flex-1 relative min-w-0 flex flex-col">
           <CanvasViewport
             root={activePage.root}
-            tokens={project.tokens}
+            tokens={activeTokens}
             device={viewportDevice}
             camera={camera}
             onCameraChange={setCamera}
@@ -462,6 +532,7 @@ export const App: React.FC = () => {
           <CommandDock
             pageName={activePage.name}
             selectedElementName={selectedNode?.name ?? null}
+            activeAction={activeAction}
             responsiveScope={responsiveScope}
             onSubmitCommand={handleExecuteAICommand}
             feedback={feedback}
@@ -501,7 +572,9 @@ export const App: React.FC = () => {
         <PublishChecklistView
           project={project}
           onClose={() => setIsPublishChecklistOpen(false)}
-          onPublishSuccess={() => setProject((prev) => ({ ...prev, isPublished: true }))}
+          onPublishSuccess={() =>
+            commitProjectUpdate({ ...project, isPublished: true })
+          }
         />
       )}
 

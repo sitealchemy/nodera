@@ -1,5 +1,17 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { CheckCircle2, ChevronDown, ChevronUp, Send, Sparkles, Undo2 } from 'lucide-react';
+import {
+  AlertCircle,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  HelpCircle,
+  Info,
+  Send,
+  Sparkles,
+  Undo2,
+} from 'lucide-react';
+import { AIExecutionResult, AIResultKind } from '../../services/aiAdapter';
+import { ElementAction } from '../../lib/documentTree';
 import { ResponsiveScope } from '../../types/document';
 
 /**
@@ -12,15 +24,57 @@ import { ResponsiveScope } from '../../types/document';
  */
 
 export interface CommandFeedback {
+  kind: AIResultKind;
   summary: string;
   steps: string[];
 }
 
+/** How each outcome presents itself. Only `applied` reads as success. */
+const FEEDBACK_STYLE: Record<
+  AIResultKind,
+  { icon: React.ReactNode; tone: string; undoable: boolean }
+> = {
+  applied: {
+    icon: <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />,
+    tone: 'bg-[#F6F4EF] border-[#DED9CF]',
+    undoable: true,
+  },
+  unchanged: {
+    icon: <Info className="w-3.5 h-3.5 text-[#706C65] shrink-0" />,
+    tone: 'bg-[#F6F4EF] border-[#DED9CF]',
+    undoable: false,
+  },
+  unsupported: {
+    icon: <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />,
+    tone: 'bg-amber-50 border-amber-200',
+    undoable: false,
+  },
+  needsClarification: {
+    icon: <HelpCircle className="w-3.5 h-3.5 text-[#A86645] shrink-0" />,
+    tone: 'bg-[#A86645]/10 border-[#A86645]/30',
+    undoable: false,
+  },
+  error: {
+    icon: <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />,
+    tone: 'bg-rose-50 border-rose-200',
+    undoable: false,
+  },
+};
+
+const ACTION_LABEL: Record<ElementAction, string> = {
+  text: 'Tekst',
+  size: 'Rozmiar',
+  appearance: 'Wygląd',
+  position: 'Położenie',
+};
+
 export interface CommandDockProps {
   pageName: string;
   selectedElementName: string | null;
+  /** The action open on the selection, shown so the command's context is explicit. */
+  activeAction: ElementAction | null;
   responsiveScope: ResponsiveScope;
-  onSubmitCommand: (prompt: string) => void;
+  onSubmitCommand: (prompt: string) => AIExecutionResult;
   feedback: CommandFeedback | null;
   onUndoLastAction: () => void;
   onDismissFeedback: () => void;
@@ -35,6 +89,7 @@ const SCOPE_LABEL: Record<ResponsiveScope, string> = {
 export const CommandDock: React.FC<CommandDockProps> = ({
   pageName,
   selectedElementName,
+  activeAction,
   responsiveScope,
   onSubmitCommand,
   feedback,
@@ -59,9 +114,15 @@ export const CommandDock: React.FC<CommandDockProps> = ({
     event.preventDefault();
     const text = prompt.trim();
     if (!text) return;
-    onSubmitCommand(text);
-    setPrompt('');
-    setStepsOpen(false);
+    const result = onSubmitCommand(text);
+    // Keep what was typed when the command could not be carried out, so the
+    // user can correct it instead of retyping from scratch.
+    const keepText =
+      result.kind === 'unsupported' ||
+      result.kind === 'needsClarification' ||
+      result.kind === 'error';
+    if (!keepText) setPrompt('');
+    setStepsOpen(result.kind !== 'applied' && result.detailedSteps.length > 0);
   };
 
   const handleKeyDown = (event: React.KeyboardEvent) => {
@@ -76,16 +137,20 @@ export const CommandDock: React.FC<CommandDockProps> = ({
     return (
       <div className="absolute bottom-4 right-4 z-30 flex flex-col items-end gap-2">
         {feedback && (
-          <div className="flex items-center gap-2 bg-[#FFFEFB] border border-[#DED9CF] rounded-xl shadow-md px-3 py-2 text-[11px] max-w-sm">
-            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+          <div
+            className={`flex items-center gap-2 border rounded-xl shadow-md px-3 py-2 text-[11px] max-w-sm ${FEEDBACK_STYLE[feedback.kind].tone}`}
+          >
+            {FEEDBACK_STYLE[feedback.kind].icon}
             <span className="text-[#292824] truncate">{feedback.summary}</span>
-            <button
-              onClick={onUndoLastAction}
-              className="text-[#A86645] font-semibold hover:underline shrink-0 flex items-center gap-1"
-            >
-              <Undo2 className="w-3 h-3" />
-              Cofnij
-            </button>
+            {FEEDBACK_STYLE[feedback.kind].undoable && (
+              <button
+                onClick={onUndoLastAction}
+                className="text-[#A86645] font-semibold hover:underline shrink-0 flex items-center gap-1"
+              >
+                <Undo2 className="w-3 h-3" />
+                Cofnij
+              </button>
+            )}
           </div>
         )}
         <button
@@ -113,6 +178,14 @@ export const CommandDock: React.FC<CommandDockProps> = ({
           <span className="bg-[#F6F4EF] px-1.5 py-0.5 rounded border border-[#DED9CF]">
             {SCOPE_LABEL[responsiveScope]}
           </span>
+          {activeAction && (
+            <>
+              <span>·</span>
+              <span className="bg-[#292824] text-white px-1.5 py-0.5 rounded">
+                Czynność: {ACTION_LABEL[activeAction]}
+              </span>
+            </>
+          )}
         </div>
 
         <form onSubmit={handleSubmit} className="relative flex items-center">
@@ -137,9 +210,9 @@ export const CommandDock: React.FC<CommandDockProps> = ({
         </form>
 
         {feedback && (
-          <div className="rounded-xl bg-[#F6F4EF] border border-[#DED9CF] px-2.5 py-2 text-[11px]">
+          <div className={`rounded-xl border px-2.5 py-2 text-[11px] ${FEEDBACK_STYLE[feedback.kind].tone}`}>
             <div className="flex items-center gap-2">
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+              {FEEDBACK_STYLE[feedback.kind].icon}
               <span className="text-[#292824] flex-1 min-w-0 truncate">{feedback.summary}</span>
               {feedback.steps.length > 0 && (
                 <button
@@ -151,13 +224,17 @@ export const CommandDock: React.FC<CommandDockProps> = ({
                   {stepsOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
                 </button>
               )}
-              <button
-                onClick={onUndoLastAction}
-                className="text-[#A86645] font-semibold hover:underline shrink-0 flex items-center gap-1"
-              >
-                <Undo2 className="w-3 h-3" />
-                Cofnij
-              </button>
+              {/* Only an applied change can be undone. Offering "Cofnij" after
+                  an unsupported command would undo some earlier, unrelated edit. */}
+              {FEEDBACK_STYLE[feedback.kind].undoable && (
+                <button
+                  onClick={onUndoLastAction}
+                  className="text-[#A86645] font-semibold hover:underline shrink-0 flex items-center gap-1"
+                >
+                  <Undo2 className="w-3 h-3" />
+                  Cofnij
+                </button>
+              )}
             </div>
             {stepsOpen && (
               <ul className="mt-2 pt-2 border-t border-[#DED9CF] space-y-1 text-[#706C65]">
@@ -172,7 +249,9 @@ export const CommandDock: React.FC<CommandDockProps> = ({
         )}
 
         <div className="flex items-center justify-between px-1">
-          <span className="text-[10px] text-[#706C65]">Escape zwija pole, nie kasuje treści.</span>
+          <span className="text-[10px] text-[#706C65]">
+            Tryb demonstracyjny · Escape zwija pole, nie kasuje treści.
+          </span>
           <button
             onClick={() => {
               onDismissFeedback();

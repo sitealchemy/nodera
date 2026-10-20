@@ -1,4 +1,14 @@
-import { ProjectState, NodeElement, ResponsiveScope, DesignTokens } from '../types/document';
+import { ProjectState, NodeElement, ResponsiveScope } from '../types/document';
+import { resolveOpticalOffset } from '../render/resolveStyles';
+
+/**
+ * DEMONSTRATION COMMAND PARSER — not a language model.
+ *
+ * This matches a fixed set of Polish keyword patterns and performs the edit
+ * directly. There is no model call and no network access. Anything outside the
+ * patterns below is reported as `unsupported` rather than quietly succeeding.
+ */
+export const COMMAND_MODE = 'demo' as const;
 
 export interface AICommandContext {
   projectName: string;
@@ -6,21 +16,55 @@ export interface AICommandContext {
   pageSlug: string;
   selectedElementId: string | null;
   selectedElementName: string | null;
-  actionType: 'none' | 'text' | 'optical' | 'size' | 'token' | 'order';
+  /** The action the user has open on the selection, if any. */
+  actionType: 'none' | 'text' | 'size' | 'appearance' | 'position';
   responsiveScope: ResponsiveScope;
 }
 
+/**
+ * Outcome of a command.
+ *
+ * `applied` is the only kind that changes the document, and the only one that
+ * should reach undo history or show a success confirmation. The parser used to
+ * return success unconditionally, so an unrecognised instruction produced a
+ * green tick, a history entry and no change at all.
+ */
+export type AIResultKind =
+  | 'applied'
+  | 'unchanged'
+  | 'unsupported'
+  | 'needsClarification'
+  | 'error';
+
 export interface AIExecutionResult {
-  success: boolean;
+  kind: AIResultKind;
   summary: string;
   detailedSteps: string[];
   affectedElementIds: string[];
-  updatedProject: ProjectState;
+  /** Only present when `kind === 'applied'`. */
+  updatedProject?: ProjectState;
 }
+
+const unsupported = (prompt: string): AIExecutionResult => ({
+  kind: 'unsupported',
+  summary: `Nie rozumiem polecenia: „${prompt}".`,
+  detailedSteps: [
+    'Tryb demonstracyjny rozpoznaje ograniczony zestaw poleceń.',
+    'Spróbuj np.: „Zmień kolor przycisków na kobaltowy", „Wyeksponuj warsztaty", „Powiększ o 20%", „Kontakt na koniec menu".',
+  ],
+  affectedElementIds: [],
+});
+
+const needsSelection = (what: string): AIExecutionResult => ({
+  kind: 'needsClarification',
+  summary: `Zaznacz najpierw element, ${what}.`,
+  detailedSteps: ['Przytrzymaj Shift i kliknij element na płótnie albo włącz tryb „Wybierz".'],
+  affectedElementIds: [],
+});
 
 export class AIAdapter {
   /**
-   * Processes a natural language prompt with explicit context
+   * Processes a natural language prompt with explicit context.
    */
   static executeCommand(
     prompt: string,
@@ -28,233 +72,264 @@ export class AIAdapter {
     project: ProjectState
   ): AIExecutionResult {
     const p = prompt.toLowerCase().trim();
+    if (!p) return unsupported(prompt);
+
     const cloned: ProjectState = JSON.parse(JSON.stringify(project));
     const activeDirection = cloned.directions[cloned.activeDirectionId];
     const activePage = activeDirection.pages[cloned.activePageSlug];
+    if (!activePage) {
+      return {
+        kind: 'error',
+        summary: 'Nie można odczytać aktywnej podstrony.',
+        detailedSteps: [],
+        affectedElementIds: [],
+      };
+    }
+
     const steps: string[] = [];
     const affectedIds: string[] = [];
+    const scope = context.responsiveScope;
 
-    // Helper: find node by id recursively
     const findNode = (root: NodeElement, id: string): NodeElement | null => {
       if (root.id === id) return root;
-      if (root.children) {
-        for (const child of root.children) {
-          const res = findNode(child, id);
-          if (res) return res;
-        }
+      for (const child of root.children ?? []) {
+        const found = findNode(child, id);
+        if (found) return found;
       }
       return null;
     };
 
-    // CASE 1: "Wyeksponuj warsztaty" (Przenieś warsztaty wyżej, wzmocnij hierarchię, dostosuj CTA)
+    /** Writes a style the same way manual editing does: honouring the scope. */
+    const writeStyle = (node: NodeElement, patch: Record<string, string>) => {
+      if (scope === 'all') {
+        Object.assign(node.styles, patch);
+        return;
+      }
+      node.responsiveOverrides = node.responsiveOverrides ?? {};
+      node.responsiveOverrides[scope] = { ...node.responsiveOverrides[scope], ...patch };
+    };
+
+    const applied = (summary: string): AIExecutionResult => ({
+      kind: 'applied',
+      summary,
+      detailedSteps: steps,
+      affectedElementIds: affectedIds,
+      updatedProject: cloned,
+    });
+
+    const scopeNote =
+      scope === 'all' ? '' : ` (zakres: ${scope === 'mobile' ? 'małe ekrany' : 'tablety'})`;
+
+    // CASE 1: expose the workshops section
     if (p.includes('warsztat') && (p.includes('eksponuj') || p.includes('wyżej') || p.includes('pokaż'))) {
-      const rootChildren = activePage.root.children || [];
-      const workshopIndex = rootChildren.findIndex(n => n.id.includes('workshop'));
-      const heroIndex = rootChildren.findIndex(n => n.id.includes('hero'));
+      const rootChildren = activePage.root.children ?? [];
+      const workshopIndex = rootChildren.findIndex((n) => n.id.includes('workshop'));
+      const heroIndex = rootChildren.findIndex((n) => n.id.includes('hero'));
 
-      if (workshopIndex !== -1 && heroIndex !== -1 && workshopIndex > heroIndex) {
-        // Move workshops directly below hero, or reorder
-        const [wsNode] = rootChildren.splice(workshopIndex, 1);
-        rootChildren.splice(heroIndex + 1, 0, wsNode);
-        steps.push('1. Przeniesiono sekcję Warsztatów bezpośrednio pod główny nagłówek.');
-        affectedIds.push(wsNode.id);
-
-        // Update primary CTA on hero to lead to workshops
-        const heroNode = rootChildren[heroIndex];
-        const primaryCta = findNode(heroNode, 'materia-hero-cta-primary');
-        if (primaryCta) {
-          primaryCta.content = 'Zapisz się na warsztaty weekendowe';
-          steps.push('2. Zaktualizowano treść głównego przycisku CTA na „Zapisz się na warsztaty weekendowe”.');
-          affectedIds.push(primaryCta.id);
-        }
-
-        // Highlight workshop title
-        const wsTitle = findNode(wsNode, 'materia-workshops-title');
-        if (wsTitle) {
-          wsTitle.styles.color = cloned.tokens.accentCopper;
-          steps.push('3. Wzmocniono akcent kolorystyczny tytułu warsztatów (miedź).');
-          affectedIds.push(wsTitle.id);
-        }
-
-        cloned.lastUpdated = 'Przed chwilą (AI)';
+      if (workshopIndex === -1 || heroIndex === -1) {
         return {
-          success: true,
-          summary: 'Wyeksponowano sekcję warsztatów na stronie głównej.',
-          detailedSteps: steps,
-          affectedElementIds: affectedIds,
-          updatedProject: cloned
+          kind: 'unchanged',
+          summary: 'Ta podstrona nie ma sekcji warsztatów do wyeksponowania.',
+          detailedSteps: [`Sprawdzono podstronę: ${activePage.name}.`],
+          affectedElementIds: [],
         };
       }
-    }
-
-    // CASE 2: Zmiana koloru przycisków / zmiana tokenu wizualnego
-    // e.g. "zmień kolor przycisków na kobaltowy / leśny / miedziany / czarny"
-    if (p.includes('kolor') && (p.includes('przycisk') || p.includes('cta') || p.includes('token'))) {
-      let targetColor = cloned.tokens.accentCopper;
-      let colorName = 'miedziany';
-
-      if (p.includes('kobalt') || p.includes('niebiesk')) {
-        targetColor = '#24486E';
-        colorName = 'głęboki kobalt';
-      } else if (p.includes('leśn') || p.includes('zielon') || p.includes('szałw')) {
-        targetColor = '#3E5748';
-        colorName = 'leśna szałwia';
-      } else if (p.includes('czarn') || p.includes('grafit')) {
-        targetColor = '#1C1B19';
-        colorName = 'grafitowy';
-      } else if (p.includes('mied') || p.includes('ciepł')) {
-        targetColor = '#A86645';
-        colorName = 'autorska miedź';
+      if (workshopIndex <= heroIndex) {
+        return {
+          kind: 'unchanged',
+          summary: 'Sekcja warsztatów jest już wyeksponowana.',
+          detailedSteps: ['Znajduje się bezpośrednio pod główną sekcją.'],
+          affectedElementIds: [rootChildren[workshopIndex].id],
+        };
       }
 
-      // Update global design token
-      cloned.tokens.accentCopper = targetColor;
+      const [wsNode] = rootChildren.splice(workshopIndex, 1);
+      rootChildren.splice(heroIndex + 1, 0, wsNode);
+      steps.push('Przeniesiono sekcję warsztatów bezpośrednio pod główny nagłówek.');
+      affectedIds.push(wsNode.id);
 
-      // Update all buttons referencing buttonPrimary across all pages of active direction
-      Object.values(activeDirection.pages).forEach(page => {
-        const updateButtons = (node: NodeElement) => {
+      const primaryCta = findNode(rootChildren[heroIndex], 'materia-hero-cta-primary');
+      if (primaryCta) {
+        primaryCta.content = 'Zapisz się na warsztaty weekendowe';
+        steps.push('Zaktualizowano treść głównego przycisku CTA.');
+        affectedIds.push(primaryCta.id);
+      }
+
+      const wsTitle = findNode(wsNode, 'materia-workshops-title');
+      if (wsTitle) {
+        wsTitle.styles.color = activeDirection.tokens?.accentCopper ?? cloned.tokens.accentCopper;
+        steps.push('Wzmocniono akcent kolorystyczny tytułu warsztatów.');
+        affectedIds.push(wsTitle.id);
+      }
+
+      cloned.lastUpdated = 'Przed chwilą';
+      return applied('Wyeksponowano sekcję warsztatów na stronie głównej.');
+    }
+
+    // CASE 2: recolour buttons via the direction's accent token
+    if (p.includes('kolor') && (p.includes('przycisk') || p.includes('cta') || p.includes('token'))) {
+      const palette: [string[], string, string][] = [
+        [['kobalt', 'niebiesk'], '#24486E', 'głęboki kobalt'],
+        [['leśn', 'zielon', 'szałw'], '#3E5748', 'leśna szałwia'],
+        [['czarn', 'grafit'], '#1C1B19', 'grafitowy'],
+        [['mied', 'ciepł'], '#A86645', 'autorska miedź'],
+      ];
+      const match = palette.find(([keys]) => keys.some((k) => p.includes(k)));
+      if (!match) {
+        return {
+          kind: 'needsClarification',
+          summary: 'Na jaki kolor zmienić przyciski?',
+          detailedSteps: ['Rozpoznaję: kobaltowy, leśna szałwia, grafitowy, miedziany.'],
+          affectedElementIds: [],
+        };
+      }
+      const [, targetColor, colorName] = match;
+
+      const currentTokens = activeDirection.tokens ?? cloned.tokens;
+      if (currentTokens.accentCopper.toLowerCase() === targetColor.toLowerCase()) {
+        return {
+          kind: 'unchanged',
+          summary: `Przyciski już mają kolor ${colorName}.`,
+          detailedSteps: [],
+          affectedElementIds: [],
+        };
+      }
+
+      // Only this direction is touched; the others keep their own look.
+      const nextTokens = { ...currentTokens, accentCopper: targetColor };
+      activeDirection.tokens = nextTokens;
+      cloned.tokens = nextTokens;
+
+      Object.values(activeDirection.pages).forEach((page) => {
+        const walk = (node: NodeElement) => {
           if (node.tag === 'button' || node.tokenRef === 'buttonPrimary') {
             node.styles.backgroundColor = targetColor;
             affectedIds.push(node.id);
           }
-          if (node.children) node.children.forEach(updateButtons);
+          node.children?.forEach(walk);
         };
-        updateButtons(page.root);
+        walk(page.root);
       });
 
-      steps.push(`Zaktualizowano globalny token koloru przycisków na: ${colorName} (${targetColor}).`);
-      steps.push(`Zastosowano zmianę spójnie na wszystkich 4 podstronach projektu.`);
-
-      return {
-        success: true,
-        summary: `Zmieniono styl przycisków na ${colorName} we wszystkich podstronach.`,
-        detailedSteps: steps,
-        affectedElementIds: affectedIds,
-        updatedProject: cloned
-      };
+      steps.push(`Zmieniono token koloru przycisków na ${colorName} (${targetColor}).`);
+      steps.push(
+        `Zastosowano na ${Object.keys(activeDirection.pages).length} podstronach kierunku ${activeDirection.name}.`
+      );
+      steps.push('Pozostałe kierunki zachowały swój wygląd.');
+      return applied(`Zmieniono kolor przycisków na ${colorName}.`);
     }
 
-    // CASE 3: Powiększ / pomniejsz element o X% (np. "powiększ o 20%")
-    if (context.selectedElementId && (p.includes('powiększ') || p.includes('zwiększ') || p.includes('pomniejsz') || p.includes('zmniejsz'))) {
+    // CASE 3: resize the selected element
+    if (p.includes('powiększ') || p.includes('zwiększ') || p.includes('pomniejsz') || p.includes('zmniejsz')) {
+      if (!context.selectedElementId) return needsSelection('który chcesz przeskalować');
       const targetNode = findNode(activePage.root, context.selectedElementId);
-      if (targetNode) {
-        const factor = (p.includes('powiększ') || p.includes('zwiększ')) ? 1.2 : 0.8;
-        const percentStr = (p.includes('powiększ') || p.includes('zwiększ')) ? '+20%' : '-20%';
+      if (!targetNode) return needsSelection('który chcesz przeskalować');
 
-        // If font size
-        if (targetNode.styles.fontSize) {
-          const currentSize = parseInt(targetNode.styles.fontSize, 10) || 16;
-          const newSize = Math.round(currentSize * factor);
-          if (context.responsiveScope === 'mobile') {
-            targetNode.responsiveOverrides = targetNode.responsiveOverrides || {};
-            targetNode.responsiveOverrides.mobile = targetNode.responsiveOverrides.mobile || {};
-            targetNode.responsiveOverrides.mobile.fontSize = `${newSize}px`;
-            steps.push(`Ustawiono nadpisanie responsywne dla mobile: ${newSize}px.`);
-          } else {
-            targetNode.styles.fontSize = `${newSize}px`;
-            steps.push(`Zmieniono rozmiar tekstu z ${currentSize}px na ${newSize}px (${percentStr}).`);
-          }
-        } else if (targetNode.styles.height) {
-          // If image / container height
-          const currentH = parseInt(targetNode.styles.height, 10) || 300;
-          const newH = Math.round(currentH * factor);
-          targetNode.styles.height = `${newH}px`;
-          steps.push(`Zmieniono wysokość elementu z ${currentH}px na ${newH}px (${percentStr}).`);
-        }
+      const grow = p.includes('powiększ') || p.includes('zwiększ');
+      const factor = grow ? 1.2 : 0.8;
+      const percentStr = grow ? '+20%' : '-20%';
 
-        affectedIds.push(targetNode.id);
+      const effective =
+        scope !== 'all' && targetNode.responsiveOverrides?.[scope]
+          ? { ...targetNode.styles, ...targetNode.responsiveOverrides[scope] }
+          : targetNode.styles;
+
+      if (effective.fontSize) {
+        const current = parseInt(effective.fontSize, 10) || 16;
+        const next = Math.max(1, Math.round(current * factor));
+        writeStyle(targetNode, { fontSize: `${next}px` });
+        steps.push(`Rozmiar tekstu: ${current}px → ${next}px (${percentStr})${scopeNote}.`);
+      } else if (effective.height) {
+        const current = parseInt(effective.height, 10) || 300;
+        const next = Math.max(1, Math.round(current * factor));
+        writeStyle(targetNode, { height: `${next}px` });
+        steps.push(`Wysokość: ${current}px → ${next}px (${percentStr})${scopeNote}.`);
+      } else {
         return {
-          success: true,
-          summary: `Zmieniono rozmiar elementu "${targetNode.name}" o ${percentStr}.`,
-          detailedSteps: steps,
-          affectedElementIds: affectedIds,
-          updatedProject: cloned
+          kind: 'unchanged',
+          summary: `Element ${targetNode.name} nie ma rozmiaru, który mógłbym przeskalować.`,
+          detailedSteps: ['Brak ustawionego fontSize ani height.'],
+          affectedElementIds: [targetNode.id],
         };
       }
+
+      affectedIds.push(targetNode.id);
+      return applied(`Zmieniono rozmiar ${targetNode.name} o ${percentStr}.`);
     }
 
-    // CASE 4: Korekta optyczna (np. "przesuń o 1px w lewo", "korekta x -1px", "w dół")
-    if (context.selectedElementId && (p.includes('korekt') || p.includes('przesuń') || p.includes('px') || p.includes('offset'))) {
+    // CASE 4: optical nudge
+    if (p.includes('korekt') || p.includes('przesuń') || p.includes('offset') || /\d\s*px/.test(p)) {
+      if (!context.selectedElementId) return needsSelection('który chcesz przesunąć');
       const targetNode = findNode(activePage.root, context.selectedElementId);
-      if (targetNode) {
-        targetNode.opticalOffset = targetNode.opticalOffset || { x: 0, y: 0 };
-        let dx = 0;
-        let dy = 0;
+      if (!targetNode) return needsSelection('który chcesz przesunąć');
 
-        if (p.includes('lewo') || p.includes('-1px') || p.includes('- 1 px')) dx -= 1;
-        if (p.includes('prawo') || p.includes('+1px') || p.includes('+ 1 px')) dx += 1;
-        if (p.includes('gór') || p.includes('gora')) dy -= 1;
-        if (p.includes('dół') || p.includes('dol')) dy += 1;
+      let dx = 0;
+      let dy = 0;
+      if (p.includes('lewo')) dx -= 1;
+      if (p.includes('prawo')) dx += 1;
+      if (p.includes('gór') || p.includes('gora')) dy -= 1;
+      if (p.includes('dół') || p.includes('dol')) dy += 1;
 
-        if (dx === 0 && dy === 0) dx = -1; // default nudge
-
-        targetNode.opticalOffset.x += dx;
-        targetNode.opticalOffset.y += dy;
-
-        steps.push(`Zastosowano mikrokorektę położenia bez naruszenia flex/grid layoutu: X: ${targetNode.opticalOffset.x}px, Y: ${targetNode.opticalOffset.y}px.`);
-        affectedIds.push(targetNode.id);
-
+      if (dx === 0 && dy === 0) {
         return {
-          success: true,
-          summary: `Korekta optyczna: X ${targetNode.opticalOffset.x}px, Y ${targetNode.opticalOffset.y}px dla „${targetNode.name}”.`,
-          detailedSteps: steps,
-          affectedElementIds: affectedIds,
-          updatedProject: cloned
+          kind: 'needsClarification',
+          summary: 'W którą stronę przesunąć element?',
+          detailedSteps: ['Podaj kierunek: w lewo, w prawo, w górę albo w dół.'],
+          affectedElementIds: [targetNode.id],
         };
       }
+
+      // Same scope rules as the inspector's directional pad.
+      const current = resolveOpticalOffset(targetNode, scope) ?? { x: 0, y: 0 };
+      const next = { x: current.x + dx, y: current.y + dy };
+      if (scope === 'all') {
+        targetNode.opticalOffset = next;
+      } else {
+        targetNode.opticalOffsets = targetNode.opticalOffsets ?? {};
+        targetNode.opticalOffsets[scope] = next;
+      }
+
+      steps.push(`Korekta optyczna: X ${next.x}px, Y ${next.y}px${scopeNote}.`);
+      steps.push('Zmiana nie rozpycha sąsiadujących elementów.');
+      affectedIds.push(targetNode.id);
+      return applied(`Przesunięto ${targetNode.name} o ${dx}px / ${dy}px.`);
     }
 
-    // CASE 5: Kontakt na koniec (kolejność w menu)
+    // CASE 5: move Kontakt to the end of the nav
     if (p.includes('kontakt') && p.includes('koniec')) {
       const navNode = findNode(activePage.root, 'materia-menu');
-      if (navNode && navNode.children) {
-        const contactIdx = navNode.children.findIndex(c => c.name.toLowerCase().includes('kontakt'));
-        if (contactIdx !== -1) {
-          const [contactItem] = navNode.children.splice(contactIdx, 1);
-          navNode.children.push(contactItem);
-          steps.push('Przeniesiono pozycję „Kontakt” na ostatnie miejsce w nawigacji głównej.');
-          affectedIds.push(contactItem.id);
-
-          return {
-            success: true,
-            summary: 'Uporządkowano kolejność menu: Kontakt znajduje się na końcu.',
-            detailedSteps: steps,
-            affectedElementIds: affectedIds,
-            updatedProject: cloned
-          };
-        }
-      }
-    }
-
-    // CASE 6: Redaguj tekst / Popraw treść
-    if (context.selectedElementId && (p.includes('napisz') || p.includes('treść') || p.includes('redag') || p.includes('tekst'))) {
-      const targetNode = findNode(activePage.root, context.selectedElementId);
-      if (targetNode && targetNode.content) {
-        const oldContent = targetNode.content;
-        targetNode.content = targetNode.content.replace(/\.$/, '') + ' — z szacunkiem do tradycji rzemiosła.';
-        steps.push(`Zredagowano treść elementu, zachowując fakty i powściągliwy ton.`);
-        affectedIds.push(targetNode.id);
-
+      if (!navNode?.children?.length) {
         return {
-          success: true,
-          summary: `Zaktualizowano treść w elemencie „${targetNode.name}”.`,
-          detailedSteps: steps,
-          affectedElementIds: affectedIds,
-          updatedProject: cloned
+          kind: 'unchanged',
+          summary: 'Ta podstrona nie ma menu głównego do uporządkowania.',
+          detailedSteps: [],
+          affectedElementIds: [],
         };
       }
+      const idx = navNode.children.findIndex((c) => c.name.toLowerCase().includes('kontakt'));
+      if (idx === -1) {
+        return {
+          kind: 'unchanged',
+          summary: 'W menu nie ma pozycji Kontakt.',
+          detailedSteps: [],
+          affectedElementIds: [],
+        };
+      }
+      if (idx === navNode.children.length - 1) {
+        return {
+          kind: 'unchanged',
+          summary: 'Pozycja Kontakt jest już na końcu menu.',
+          detailedSteps: [],
+          affectedElementIds: [navNode.children[idx].id],
+        };
+      }
+      const [item] = navNode.children.splice(idx, 1);
+      navNode.children.push(item);
+      steps.push('Przeniesiono Kontakt na ostatnie miejsce w nawigacji.');
+      affectedIds.push(item.id);
+      return applied('Uporządkowano kolejność menu.');
     }
 
-    // Fallback: Generic respectful refinement
-    return {
-      success: true,
-      summary: `Zastosowano korektę na dokumencie: "${prompt}".`,
-      detailedSteps: [
-        `Przeanalizowano kontekst: Podstrona ${activePage.name}, Zakres ${context.responsiveScope}.`,
-        `Zachowano nienaruszony model danych i reguły layoutu.`
-      ],
-      affectedElementIds: context.selectedElementId ? [context.selectedElementId] : [],
-      updatedProject: cloned
-    };
+    return unsupported(prompt);
   }
 }

@@ -112,6 +112,15 @@ export interface DirectionOption {
   };
   subpagesPlan: string[];
   pages: Record<string, PageDocument>;
+  /**
+   * Visual settings owned by this direction.
+   *
+   * Tokens used to live only on ProjectState, shared by every direction, so
+   * recolouring one concept silently repainted the other two. Each direction
+   * now carries its own set; switching directions restores its own look.
+   * Added in schema v3.
+   */
+  tokens?: DesignTokens;
 }
 
 export interface ProjectAssumption {
@@ -163,7 +172,7 @@ export interface PublishingCheckItem {
  * document is rewritten. Bump this and extend `migrateProject` for any change
  * that is NOT backwards compatible.
  */
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 
 export interface ProjectState {
   /** Absent on documents saved before versioning; treated as v1. */

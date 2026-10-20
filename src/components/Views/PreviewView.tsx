@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Monitor, Smartphone, Tablet } from 'lucide-react';
 import { DesignTokens, PageDocument, ViewportDevice } from '../../types/document';
+import { LinkTarget } from '../../lib/links';
 import { DocumentFrame } from '../../render/DocumentFrame';
 import { VIEWPORT_WIDTHS } from '../../render/resolveStyles';
 
@@ -8,11 +9,9 @@ import { VIEWPORT_WIDTHS } from '../../render/resolveStyles';
  * User preview: the page as a visitor meets it.
  *
  * Unlike the editor artboard this frame has a fixed height and scrolls
- * internally, which is the only honest way to see viewport-dependent behaviour
- * (sticky headers, `position: fixed`, viewport units). The editor's full-height
- * artboard cannot simulate those and does not claim to.
- *
- * Entering and leaving is deliberate — there is one clear way back.
+ * internally, which is the only honest way to see viewport-dependent
+ * behaviour (sticky headers, `position: fixed`, viewport units). The editor's
+ * full-height artboard cannot simulate those and does not claim to.
  */
 
 export interface PreviewViewProps {
@@ -23,6 +22,10 @@ export interface PreviewViewProps {
   device: ViewportDevice;
   onSelectDevice: (device: ViewportDevice) => void;
   onBackToEditor: () => void;
+  onNavigate: (target: LinkTarget) => void;
+  /** Fragment to scroll to once the page has rendered. */
+  pendingAnchor: string | null;
+  onAnchorConsumed: () => void;
 }
 
 export const PreviewView: React.FC<PreviewViewProps> = ({
@@ -33,10 +36,48 @@ export const PreviewView: React.FC<PreviewViewProps> = ({
   device,
   onSelectDevice,
   onBackToEditor,
+  onNavigate,
+  pendingAnchor,
+  onAnchorConsumed,
 }) => {
-  const [frameKey, setFrameKey] = useState(0);
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const [ready, setReady] = useState(0);
   const page = pages.find((p) => p.slug === activePageSlug) ?? pages[0];
   const width = VIEWPORT_WIDTHS[device];
+  const slugs = pages.map((p) => p.slug);
+
+  const handleFrameReady = useCallback((frame: HTMLIFrameElement | null) => {
+    frameRef.current = frame;
+    setReady((n) => n + 1);
+  }, []);
+
+  /**
+   * Resolve a pending fragment once the target page is on screen.
+   *
+   * Scrolls the iframe's own document — the artboard is inside the frame, so
+   * scrolling the app shell would move the wrong thing.
+   */
+  useEffect(() => {
+    if (!pendingAnchor) return;
+    const doc = frameRef.current?.contentDocument;
+    if (!doc) return;
+
+    const attempt = () => {
+      const escaped =
+        typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(pendingAnchor) : pendingAnchor;
+      const target =
+        doc.getElementById(pendingAnchor) ?? doc.querySelector(`[name="${escaped}"]`);
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+      // Consumed either way: a fragment with no target should not keep retrying.
+      onAnchorConsumed();
+    };
+
+    // One frame of delay so a page switch has rendered before we look.
+    const timer = window.setTimeout(attempt, 60);
+    return () => window.clearTimeout(timer);
+  }, [pendingAnchor, activePageSlug, ready, onAnchorConsumed]);
 
   return (
     <div className="h-screen w-screen flex flex-col bg-[#ECE8DF] text-[#292824] font-sans overflow-hidden">
@@ -55,10 +96,7 @@ export const PreviewView: React.FC<PreviewViewProps> = ({
           </span>
           <select
             value={activePageSlug}
-            onChange={(e) => {
-              onSelectPage(e.target.value);
-              setFrameKey((key) => key + 1);
-            }}
+            onChange={(e) => onSelectPage(e.target.value)}
             className="px-2 py-1.5 bg-[#F6F4EF] border border-[#DED9CF] rounded-lg text-xs font-medium max-w-[180px]"
           >
             {pages.map((p) => (
@@ -90,25 +128,30 @@ export const PreviewView: React.FC<PreviewViewProps> = ({
         </div>
       </header>
 
-      <div className="flex-1 overflow-auto flex justify-center p-4">
+      <div className="flex-1 min-h-0 overflow-auto flex justify-center p-4">
         <div
           className="bg-white shadow-xl ring-1 ring-black/5 overflow-hidden"
           style={{ width, maxWidth: '100%', height: '100%' }}
         >
+          {/* Keyed by page+device only: the frame must not remount on every
+              render, or a pending anchor would never find a stable document. */}
           <DocumentFrame
-            key={`${frameKey}-${page.slug}-${device}`}
+            key={`${page.slug}-${device}`}
             root={page.root}
             tokens={tokens}
             device={device}
             interactive
+            knownSlugs={slugs}
+            onNavigate={onNavigate}
+            onFrameReady={handleFrameReady}
             style={{ width: '100%', height: '100%' }}
           />
         </div>
       </div>
 
       <footer className="shrink-0 bg-[#FFFEFB] border-t border-[#DED9CF] px-4 py-2 text-[10px] text-[#706C65] text-center">
-        Odnośniki działają w obrębie podglądu. Formularze nie mają backendu i pozostają
-        demonstracyjne.
+        Odnośniki wewnętrzne przełączają podstrony, zewnętrzne otwierają się w nowej karcie.
+        Formularze nie mają backendu i pozostają demonstracyjne.
       </footer>
     </div>
   );
