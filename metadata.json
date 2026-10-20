@@ -1,0 +1,7 @@
+{
+  "name": "Nodera by Brainode",
+  "description": "Działająca, dopracowana aplikacja webowa do tworzenia stron internetowych z pomocą AI: od wywiadu po dopracowaną propozycję i publikację.",
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
