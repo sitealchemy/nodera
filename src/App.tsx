@@ -1,220 +1,348 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  ProjectState, 
-  ViewportDevice, 
-  ResponsiveScope, 
-  WorkScope, 
-  NodeElement, 
-  ProposalComment,
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  DesignTokens,
+  ElementStyles,
+  NodeElement,
+  OpticalOffset,
   ProjectAssumption,
-  DesignTokens
+  ProjectState,
+  ProposalComment,
+  ResponsiveScope,
+  ViewportDevice,
+  WorkScope,
 } from './types/document';
 import { StorageService } from './services/storage';
 import { AIAdapter, AICommandContext } from './services/aiAdapter';
 import { INITIAL_SPLOT_PROJECT } from './data/splotDemo';
+import { Camera, IDENTITY_CAMERA } from './lib/camera';
+import { ElementAction, findNode, navigateFrom, nodeExists } from './lib/documentTree';
+import { resolveOpticalOffset } from './render/resolveStyles';
 
-import { TopBar } from './components/Editor/TopBar';
-import { BottomBar } from './components/Editor/BottomBar';
-import { Canvas } from './components/Editor/Canvas';
-import { SidebarLeft } from './components/Editor/SidebarLeft';
-import { SidebarRight } from './components/Editor/SidebarRight';
+import { EditorHeader } from './components/Editor/EditorHeader';
+import { DrawerId, DrawerRail } from './components/Editor/DrawerRail';
+import { CanvasViewport } from './components/Editor/CanvasViewport';
+import { ActionInspector } from './components/Editor/ActionInspector';
+import { CommandDock, CommandFeedback } from './components/Editor/CommandDock';
 
 import { IntakeView } from './components/Views/IntakeView';
 import { DirectionsView } from './components/Views/DirectionsView';
 import { ProposalView } from './components/Views/ProposalView';
 import { PublishChecklistView } from './components/Views/PublishChecklistView';
 import { CodeExportModal } from './components/Views/CodeExportModal';
+import { PreviewView } from './components/Views/PreviewView';
+
+type Screen = 'intake' | 'directions' | 'editor' | 'preview';
+
+/** Text entry must keep its native keyboard behaviour. */
+function isTextEntryTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el?.tagName) return false;
+  const tag = el.tagName.toUpperCase();
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
+}
 
 export const App: React.FC = () => {
-  // Screen routing: 'intake' | 'directions' | 'editor'
-  const [screen, setScreen] = useState<'intake' | 'directions' | 'editor'>('editor');
+  const [screen, setScreen] = useState<Screen>('editor');
 
-  // Central project state
+  // --- Document state (undoable) ------------------------------------------
   const [project, setProject] = useState<ProjectState>(() => StorageService.loadProject());
-
-  // History stack for undo/redo
   const [historyStack, setHistoryStack] = useState<ProjectState[]>([]);
   const [futureStack, setFutureStack] = useState<ProjectState[]>([]);
 
-  // Editor states
-  const [selectedElementId, setSelectedElementId] = useState<string | null>('materia-hero-heading');
+  // --- UI state (never undoable, never persisted into the document) -------
+  const [camera, setCamera] = useState<Camera>(IDENTITY_CAMERA);
+  const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
+  const [activeAction, setActiveAction] = useState<ElementAction | null>(null);
+  const [openDrawer, setOpenDrawer] = useState<DrawerId | null>(null);
+  const [selectMode, setSelectMode] = useState(false);
+  const [handTool, setHandTool] = useState(false);
   const [viewportDevice, setViewportDevice] = useState<ViewportDevice>('desktop');
   const [responsiveScope, setResponsiveScope] = useState<ResponsiveScope>('all');
-  const [workScope, setWorkScope] = useState<WorkScope>('all');
-  const [xrayMode, setXrayMode] = useState(false);
-  const [focusMode, setFocusMode] = useState(false);
+  const [workScope] = useState<WorkScope>('all');
 
-  // Modals
   const [isProposalOpen, setIsProposalOpen] = useState(false);
   const [isPublishChecklistOpen, setIsPublishChecklistOpen] = useState(false);
   const [isCodeExportOpen, setIsCodeExportOpen] = useState(false);
+  const [feedback, setFeedback] = useState<CommandFeedback | null>(null);
 
-  // Last AI feedback
-  const [lastExecutionFeedback, setLastExecutionFeedback] = useState<{
-    summary: string;
-    steps: string[];
-  } | null>(null);
-
-  // Persist project changes
+  // Persist the document only. Camera, drawers and selection are session UI.
   useEffect(() => {
     StorageService.saveProject(project);
   }, [project]);
 
-  // Helper to commit state with undo
-  const commitProjectUpdate = (newProject: ProjectState, isUndoOperation = false) => {
-    if (!isUndoOperation) {
-      setHistoryStack(prev => [...prev.slice(-25), JSON.parse(JSON.stringify(project))]);
-      setFutureStack([]);
-    }
-    setProject(newProject);
-  };
-
-  const handleUndo = () => {
-    if (historyStack.length === 0) return;
-    const previous = historyStack[historyStack.length - 1];
-    const newHistory = historyStack.slice(0, historyStack.length - 1);
-    setFutureStack(prev => [JSON.parse(JSON.stringify(project)), ...prev]);
-    setHistoryStack(newHistory);
-    setProject(previous);
-  };
-
-  const handleRedo = () => {
-    if (futureStack.length === 0) return;
-    const next = futureStack[0];
-    const newFuture = futureStack.slice(1);
-    setHistoryStack(prev => [...prev, JSON.parse(JSON.stringify(project))]);
-    setFutureStack(newFuture);
-    setProject(next);
-  };
-
-  // Find node helper
-  const findNodeRecursive = (node: NodeElement, id: string): NodeElement | null => {
-    if (node.id === id) return node;
-    if (node.children) {
-      for (const child of node.children) {
-        const found = findNodeRecursive(child, id);
-        if (found) return found;
-      }
-    }
-    return null;
-  };
-
   const activeDirection = project.directions[project.activeDirectionId];
-  const activePage = activeDirection.pages[project.activePageSlug] || Object.values(activeDirection.pages)[0];
-  const selectedNode = selectedElementId ? findNodeRecursive(activePage.root, selectedElementId) : null;
+  const pages = useMemo(() => Object.values(activeDirection.pages), [activeDirection]);
+  const activePage = activeDirection.pages[project.activePageSlug] ?? pages[0];
+  const selectedNode = selectedElementId ? findNode(activePage.root, selectedElementId) : null;
 
-  // Actions
-  const handleNudgeElement = (id: string, dx: number, dy: number) => {
-    const cloned: ProjectState = JSON.parse(JSON.stringify(project));
-    const target = findNodeRecursive(cloned.directions[cloned.activeDirectionId].pages[cloned.activePageSlug].root, id);
-    if (!target) return;
-
-    target.opticalOffset = target.opticalOffset || { x: 0, y: 0 };
-    target.opticalOffset.x += dx;
-    target.opticalOffset.y += dy;
-
-    commitProjectUpdate(cloned);
-  };
-
-  const handleResetNudge = () => {
-    if (!selectedElementId) return;
-    const cloned: ProjectState = JSON.parse(JSON.stringify(project));
-    const target = findNodeRecursive(cloned.directions[cloned.activeDirectionId].pages[cloned.activePageSlug].root, selectedElementId);
-    if (!target) return;
-    target.opticalOffset = { x: 0, y: 0 };
-    commitProjectUpdate(cloned);
-  };
-
-  const handleUpdateElementContent = (newContent: string) => {
-    if (!selectedElementId) return;
-    const cloned: ProjectState = JSON.parse(JSON.stringify(project));
-    const target = findNodeRecursive(cloned.directions[cloned.activeDirectionId].pages[cloned.activePageSlug].root, selectedElementId);
-    if (!target) return;
-    target.content = newContent;
-    commitProjectUpdate(cloned);
-  };
-
-  const handleUpdateElementStyles = (styles: any) => {
-    if (!selectedElementId) return;
-    const cloned: ProjectState = JSON.parse(JSON.stringify(project));
-    const target = findNodeRecursive(cloned.directions[cloned.activeDirectionId].pages[cloned.activePageSlug].root, selectedElementId);
-    if (!target) return;
-
-    if (responsiveScope === 'mobile') {
-      target.responsiveOverrides = target.responsiveOverrides || {};
-      target.responsiveOverrides.mobile = { ...target.responsiveOverrides.mobile, ...styles };
-    } else {
-      target.styles = { ...target.styles, ...styles };
+  // A selection that no longer exists (page or direction changed) is dropped
+  // rather than left pointing at a stale id.
+  useEffect(() => {
+    if (selectedElementId && !nodeExists(activePage.root, selectedElementId)) {
+      setSelectedElementId(null);
+      setActiveAction(null);
     }
-    commitProjectUpdate(cloned);
-  };
+  }, [activePage, selectedElementId]);
 
-  // AI Command execution
-  const handleExecuteAICommand = (prompt: string) => {
-    const ctx: AICommandContext = {
-      projectName: project.name,
-      directionName: activeDirection.name,
-      pageSlug: project.activePageSlug,
-      selectedElementId,
-      selectedElementName: selectedNode ? selectedNode.name : null,
-      actionType: 'none',
-      responsiveScope
+  // --- Document mutation ---------------------------------------------------
+  const commitProjectUpdate = useCallback((next: ProjectState) => {
+    setProject((current) => {
+      setHistoryStack((stack) => [...stack.slice(-24), JSON.parse(JSON.stringify(current))]);
+      setFutureStack([]);
+      return next;
+    });
+  }, []);
+
+  const handleUndo = useCallback(() => {
+    setHistoryStack((stack) => {
+      if (stack.length === 0) return stack;
+      const previous = stack[stack.length - 1];
+      setProject((current) => {
+        setFutureStack((future) => [JSON.parse(JSON.stringify(current)), ...future]);
+        return previous;
+      });
+      return stack.slice(0, -1);
+    });
+  }, []);
+
+  const handleRedo = useCallback(() => {
+    setFutureStack((future) => {
+      if (future.length === 0) return future;
+      const next = future[0];
+      setProject((current) => {
+        setHistoryStack((stack) => [...stack, JSON.parse(JSON.stringify(current))]);
+        return next;
+      });
+      return future.slice(1);
+    });
+  }, []);
+
+  /** Clone the project and hand the caller the selected node inside the clone. */
+  const mutateSelectedNode = useCallback(
+    (mutator: (node: NodeElement, draft: ProjectState) => void) => {
+      if (!selectedElementId) return;
+      const draft: ProjectState = JSON.parse(JSON.stringify(project));
+      const page = draft.directions[draft.activeDirectionId].pages[draft.activePageSlug];
+      const node = page ? findNode(page.root, selectedElementId) : null;
+      if (!node) return;
+      mutator(node, draft);
+      commitProjectUpdate(draft);
+    },
+    [project, selectedElementId, commitProjectUpdate],
+  );
+
+  const handleUpdateElementContent = useCallback(
+    (content: string) => {
+      mutateSelectedNode((node) => {
+        node.content = content;
+      });
+    },
+    [mutateSelectedNode],
+  );
+
+  /**
+   * Writes a style edit to the scope the UI is showing.
+   *
+   * Previously only `mobile` was handled, so choosing "tablet" silently wrote a
+   * global style while the inspector claimed the edit was local. Both scopes
+   * now route to their own override bucket.
+   */
+  const handleUpdateElementStyles = useCallback(
+    (styles: Partial<ElementStyles>) => {
+      mutateSelectedNode((node) => {
+        if (responsiveScope === 'all') {
+          node.styles = { ...node.styles, ...styles };
+          return;
+        }
+        node.responsiveOverrides = node.responsiveOverrides ?? {};
+        node.responsiveOverrides[responsiveScope] = {
+          ...node.responsiveOverrides[responsiveScope],
+          ...styles,
+        };
+      });
+    },
+    [mutateSelectedNode, responsiveScope],
+  );
+
+  /**
+   * Optical offset, also scope-aware.
+   *
+   * The offset used to be a single value regardless of scope, so a nudge made
+   * while editing mobile silently moved every breakpoint. Per-scope offsets
+   * live in `opticalOffsets`; `opticalOffset` remains the shared value.
+   */
+  const applyNudge = useCallback(
+    (nodeId: string, dx: number, dy: number) => {
+      const draft: ProjectState = JSON.parse(JSON.stringify(project));
+      const page = draft.directions[draft.activeDirectionId].pages[draft.activePageSlug];
+      const node = page ? findNode(page.root, nodeId) : null;
+      if (!node) return;
+
+      const current = resolveOpticalOffset(node, responsiveScope) ?? { x: 0, y: 0 };
+      const next: OpticalOffset = { x: current.x + dx, y: current.y + dy };
+
+      if (responsiveScope === 'all') {
+        node.opticalOffset = next;
+      } else {
+        node.opticalOffsets = node.opticalOffsets ?? {};
+        node.opticalOffsets[responsiveScope] = next;
+      }
+      commitProjectUpdate(draft);
+    },
+    [project, responsiveScope, commitProjectUpdate],
+  );
+
+  const handleResetNudge = useCallback(() => {
+    mutateSelectedNode((node) => {
+      if (responsiveScope === 'all') {
+        node.opticalOffset = { x: 0, y: 0 };
+      } else if (node.opticalOffsets) {
+        delete node.opticalOffsets[responsiveScope];
+      }
+    });
+  }, [mutateSelectedNode, responsiveScope]);
+
+  const handleUpdateTokens = useCallback(
+    (delta: Partial<DesignTokens>) => {
+      const draft: ProjectState = JSON.parse(JSON.stringify(project));
+      draft.tokens = { ...draft.tokens, ...delta };
+
+      if (delta.accentCopper) {
+        Object.values(draft.directions).forEach((dir) => {
+          Object.values(dir.pages).forEach((page) => {
+            const walk = (node: NodeElement) => {
+              if (node.tag === 'button' || node.tokenRef === 'buttonPrimary') {
+                node.styles.backgroundColor = delta.accentCopper;
+              }
+              node.children?.forEach(walk);
+            };
+            walk(page.root);
+          });
+        });
+      }
+      if (delta.buttonRadius) {
+        Object.values(draft.directions).forEach((dir) => {
+          Object.values(dir.pages).forEach((page) => {
+            const walk = (node: NodeElement) => {
+              if (node.tag === 'button' || node.tokenRef === 'buttonPrimary') {
+                node.styles.borderRadius = delta.buttonRadius;
+              }
+              node.children?.forEach(walk);
+            };
+            walk(page.root);
+          });
+        });
+      }
+      commitProjectUpdate(draft);
+    },
+    [project, commitProjectUpdate],
+  );
+
+  const handleExecuteAICommand = useCallback(
+    (prompt: string) => {
+      const context: AICommandContext = {
+        projectName: project.name,
+        directionName: activeDirection.name,
+        pageSlug: project.activePageSlug,
+        selectedElementId,
+        selectedElementName: selectedNode?.name ?? null,
+        actionType: 'none',
+        responsiveScope,
+      };
+      const result = AIAdapter.executeCommand(prompt, context, project);
+      if (!result.success) return;
+      commitProjectUpdate(result.updatedProject);
+      setFeedback({ summary: result.summary, steps: result.detailedSteps });
+    },
+    [project, activeDirection, selectedElementId, selectedNode, responsiveScope, commitProjectUpdate],
+  );
+
+  const handleAddComment = useCallback(
+    (comment: ProposalComment) => {
+      const draft: ProjectState = JSON.parse(JSON.stringify(project));
+      draft.comments.unshift(comment);
+      commitProjectUpdate(draft);
+    },
+    [project, commitProjectUpdate],
+  );
+
+  const handleCreateSnapshot = useCallback(
+    (title: string) => {
+      const draft: ProjectState = JSON.parse(JSON.stringify(project));
+      draft.snapshots.push(StorageService.createSnapshot(draft, title));
+      commitProjectUpdate(draft);
+    },
+    [project, commitProjectUpdate],
+  );
+
+  // --- Keyboard ------------------------------------------------------------
+  // Escape closes the action first, then the selection. Arrows either nudge
+  // (position action) or walk the document structure.
+  const selectedIdRef = useRef(selectedElementId);
+  selectedIdRef.current = selectedElementId;
+
+  useEffect(() => {
+    if (screen !== 'editor') return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (isTextEntryTarget(event.target)) return;
+
+      const mod = event.metaKey || event.ctrlKey;
+      if (mod && event.key.toLowerCase() === 'z') {
+        event.preventDefault();
+        if (event.shiftKey) handleRedo();
+        else handleUndo();
+        return;
+      }
+      if (mod && event.key.toLowerCase() === 'y') {
+        event.preventDefault();
+        handleRedo();
+        return;
+      }
+
+      if (event.key === 'Escape') {
+        if (activeAction) setActiveAction(null);
+        else if (selectedIdRef.current) setSelectedElementId(null);
+        else if (openDrawer) setOpenDrawer(null);
+        return;
+      }
+
+      const id = selectedIdRef.current;
+      if (!id) return;
+
+      const arrows: Record<string, 'up' | 'down' | 'left' | 'right'> = {
+        ArrowUp: 'up',
+        ArrowDown: 'down',
+        ArrowLeft: 'left',
+        ArrowRight: 'right',
+      };
+      const direction = arrows[event.key];
+      if (!direction) return;
+
+      event.preventDefault();
+      if (activeAction === 'position') {
+        const delta = {
+          up: [0, -1],
+          down: [0, 1],
+          left: [-1, 0],
+          right: [1, 0],
+        }[direction];
+        applyNudge(id, delta[0], delta[1]);
+      } else {
+        const next = navigateFrom(activePage.root, id, direction);
+        if (next) setSelectedElementId(next.id);
+      }
     };
 
-    const res = AIAdapter.executeCommand(prompt, ctx, project);
-    if (res.success) {
-      commitProjectUpdate(res.updatedProject);
-      setLastExecutionFeedback({
-        summary: res.summary,
-        steps: res.detailedSteps
-      });
-    }
-  };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [screen, activeAction, openDrawer, activePage, applyNudge, handleUndo, handleRedo]);
 
-  // Global design token updating
-  const handleUpdateTokens = (tokenDelta: Partial<DesignTokens>) => {
-    const cloned: ProjectState = JSON.parse(JSON.stringify(project));
-    cloned.tokens = { ...cloned.tokens, ...tokenDelta };
-
-    // If accent color changed, update all buttons across project
-    if (tokenDelta.accentCopper) {
-      Object.values(cloned.directions).forEach(dir => {
-        Object.values(dir.pages).forEach(page => {
-          const updateNodes = (n: NodeElement) => {
-            if (n.tag === 'button' || n.tokenRef === 'buttonPrimary') {
-              n.styles.backgroundColor = tokenDelta.accentCopper;
-            }
-            if (n.children) n.children.forEach(updateNodes);
-          };
-          updateNodes(page.root);
-        });
-      });
-    }
-
-    commitProjectUpdate(cloned);
-  };
-
-  // Snapshots & Comments
-  const handleAddComment = (comment: ProposalComment) => {
-    const cloned: ProjectState = JSON.parse(JSON.stringify(project));
-    cloned.comments.unshift(comment);
-    commitProjectUpdate(cloned);
-  };
-
-  const handleCreateSnapshot = (title: string) => {
-    const cloned: ProjectState = JSON.parse(JSON.stringify(project));
-    const snap = StorageService.createSnapshot(cloned, title);
-    cloned.snapshots.push(snap);
-    commitProjectUpdate(cloned);
-  };
-
-  // Route Views
+  // --- Routing -------------------------------------------------------------
   if (screen === 'intake') {
     return (
       <IntakeView
-        onGenerateDirections={(notes, assumptions) => {
-          setScreen('directions');
-        }}
+        onGenerateDirections={() => setScreen('directions')}
         onLoadDemoProject={() => {
           setProject(INITIAL_SPLOT_PROJECT);
           setScreen('editor');
@@ -229,7 +357,9 @@ export const App: React.FC = () => {
         directions={project.directions}
         activeDirectionId={project.activeDirectionId}
         onSelectDirectionAndOpenEditor={(dirId) => {
-          setProject(prev => ({ ...prev, activeDirectionId: dirId }));
+          setProject((prev) => ({ ...prev, activeDirectionId: dirId }));
+          setSelectedElementId(null);
+          setActiveAction(null);
           setScreen('editor');
         }}
         onBackToIntake={() => setScreen('intake')}
@@ -237,18 +367,37 @@ export const App: React.FC = () => {
     );
   }
 
+  if (screen === 'preview') {
+    return (
+      <PreviewView
+        pages={pages}
+        activePageSlug={project.activePageSlug}
+        onSelectPage={(slug) => setProject((prev) => ({ ...prev, activePageSlug: slug }))}
+        tokens={project.tokens}
+        device={viewportDevice}
+        onSelectDevice={setViewportDevice}
+        onBackToEditor={() => setScreen('editor')}
+      />
+    );
+  }
+
+  const effectiveOffset = selectedNode
+    ? resolveOpticalOffset(selectedNode, responsiveScope) ?? { x: 0, y: 0 }
+    : { x: 0, y: 0 };
+
   return (
-    <div className="h-screen w-screen flex flex-col bg-[#F6F4EF] text-[#292824] overflow-hidden select-none font-sans">
-      
-      {/* Top Bar */}
-      <TopBar
+    <div className="h-screen w-screen flex flex-col bg-[#F6F4EF] text-[#292824] overflow-hidden font-sans">
+      <EditorHeader
         projectName={project.name}
+        pages={pages}
+        activePageSlug={project.activePageSlug}
+        onSelectPage={(slug) => {
+          setProject((prev) => ({ ...prev, activePageSlug: slug }));
+          setSelectedElementId(null);
+          setActiveAction(null);
+        }}
         directions={project.directions}
         activeDirectionId={project.activeDirectionId}
-        onSelectDirection={(dirId) => setProject(prev => ({ ...prev, activeDirectionId: dirId }))}
-        pages={Object.keys(activeDirection.pages)}
-        activePageSlug={project.activePageSlug}
-        onSelectPage={(slug) => setProject(prev => ({ ...prev, activePageSlug: slug }))}
         viewportDevice={viewportDevice}
         onSelectViewport={setViewportDevice}
         responsiveScope={responsiveScope}
@@ -257,23 +406,32 @@ export const App: React.FC = () => {
         canRedo={futureStack.length > 0}
         onUndo={handleUndo}
         onRedo={handleRedo}
+        onOpenPreview={() => setScreen('preview')}
         onOpenProposal={() => setIsProposalOpen(true)}
         onOpenPublishChecklist={() => setIsPublishChecklistOpen(true)}
         onOpenCodeExport={() => setIsCodeExportOpen(true)}
         onOpenDirectionsView={() => setScreen('directions')}
       />
 
-      {/* Main Workspace (Left Drawer + Central Canvas + Right Drawer) */}
-      <div className="flex-1 flex overflow-hidden">
-        
-        {/* Left Drawer */}
-        <SidebarLeft
-          pages={activeDirection.pages}
+      <div className="flex-1 flex min-h-0 relative">
+        <DrawerRail
+          openDrawer={openDrawer}
+          onToggleDrawer={(drawer) => setOpenDrawer((open) => (open === drawer ? null : drawer))}
+          onCloseDrawer={() => setOpenDrawer(null)}
+          pages={pages}
           activePageSlug={project.activePageSlug}
-          onSelectPage={(slug) => setProject(prev => ({ ...prev, activePageSlug: slug }))}
+          onSelectPage={(slug) => {
+            setProject((prev) => ({ ...prev, activePageSlug: slug }));
+            setSelectedElementId(null);
+            setActiveAction(null);
+          }}
           directions={project.directions}
           activeDirectionId={project.activeDirectionId}
-          onSelectDirection={(id) => setProject(prev => ({ ...prev, activeDirectionId: id }))}
+          onSelectDirection={(id) => {
+            setProject((prev) => ({ ...prev, activeDirectionId: id }));
+            setSelectedElementId(null);
+            setActiveAction(null);
+          }}
           rootElement={activePage.root}
           selectedElementId={selectedElementId}
           onSelectElement={setSelectedElementId}
@@ -281,49 +439,55 @@ export const App: React.FC = () => {
           onUpdateTokens={handleUpdateTokens}
         />
 
-        {/* Central Canvas */}
-        <Canvas
-          rootElement={activePage.root}
-          selectedElementId={selectedElementId}
-          onSelectElement={setSelectedElementId}
-          viewportDevice={viewportDevice}
-          responsiveScope={responsiveScope}
-          workScope={workScope}
-          tokens={project.tokens}
-          xrayMode={xrayMode}
-          focusMode={focusMode}
-          onNudgeElement={handleNudgeElement}
-          onUpdateElementContent={handleUpdateElementContent}
-        />
+        {/* Must be a flex container: CanvasViewport sizes itself with flex-1,
+            and in a block parent it would collapse to zero height and clip
+            the whole canvas away under its own overflow-hidden. */}
+        <div className="flex-1 relative min-w-0 flex flex-col">
+          <CanvasViewport
+            root={activePage.root}
+            tokens={project.tokens}
+            device={viewportDevice}
+            camera={camera}
+            onCameraChange={setCamera}
+            selectedElementId={selectedElementId}
+            onSelectElement={setSelectedElementId}
+            activeAction={activeAction}
+            onChooseAction={setActiveAction}
+            selectMode={selectMode}
+            onToggleSelectMode={() => setSelectMode((on) => !on)}
+            handTool={handTool}
+            onToggleHandTool={() => setHandTool((on) => !on)}
+          />
 
-        {/* Right Precision Inspector */}
-        <SidebarRight
-          selectedElement={selectedNode}
-          onDeselect={() => setSelectedElementId(null)}
-          onUpdateStyles={handleUpdateElementStyles}
-          onUpdateContent={handleUpdateElementContent}
-          onNudge={(dx, dy) => {
-            if (selectedElementId) handleNudgeElement(selectedElementId, dx, dy);
-          }}
-          onResetNudge={handleResetNudge}
-          responsiveScope={responsiveScope}
-        />
+          <CommandDock
+            pageName={activePage.name}
+            selectedElementName={selectedNode?.name ?? null}
+            responsiveScope={responsiveScope}
+            onSubmitCommand={handleExecuteAICommand}
+            feedback={feedback}
+            onUndoLastAction={() => {
+              handleUndo();
+              setFeedback(null);
+            }}
+            onDismissFeedback={() => setFeedback(null)}
+          />
+        </div>
 
+        {selectedNode && activeAction && (
+          <ActionInspector
+            node={selectedNode}
+            action={activeAction}
+            responsiveScope={responsiveScope}
+            effectiveOffset={effectiveOffset}
+            onClose={() => setActiveAction(null)}
+            onUpdateContent={handleUpdateElementContent}
+            onUpdateStyles={handleUpdateElementStyles}
+            onNudge={(dx, dy) => selectedElementId && applyNudge(selectedElementId, dx, dy)}
+            onResetNudge={handleResetNudge}
+          />
+        )}
       </div>
 
-      {/* Bottom Command Bar */}
-      <BottomBar
-        projectName={project.name}
-        pageName={activePage.name}
-        selectedElementName={selectedNode ? selectedNode.name : null}
-        responsiveScope={responsiveScope}
-        workScope={workScope}
-        onSubmitCommand={handleExecuteAICommand}
-        lastExecutionFeedback={lastExecutionFeedback}
-        onUndoLastAction={handleUndo}
-      />
-
-      {/* Modals */}
       {isProposalOpen && (
         <ProposalView
           project={project}
@@ -337,19 +501,13 @@ export const App: React.FC = () => {
         <PublishChecklistView
           project={project}
           onClose={() => setIsPublishChecklistOpen(false)}
-          onPublishSuccess={() => {
-            setProject(prev => ({ ...prev, isPublished: true }));
-          }}
+          onPublishSuccess={() => setProject((prev) => ({ ...prev, isPublished: true }))}
         />
       )}
 
       {isCodeExportOpen && (
-        <CodeExportModal
-          project={project}
-          onClose={() => setIsCodeExportOpen(false)}
-        />
+        <CodeExportModal project={project} onClose={() => setIsCodeExportOpen(false)} />
       )}
-
     </div>
   );
 };

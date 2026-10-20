@@ -1,19 +1,43 @@
-import { ProjectState, ProposalSnapshot, NodeElement } from '../types/document';
+import {
+  CURRENT_SCHEMA_VERSION,
+  NodeElement,
+  ProjectState,
+  ProposalSnapshot,
+} from '../types/document';
 import { INITIAL_SPLOT_PROJECT } from '../data/splotDemo';
+import {
+  isVoidTag,
+  resolveRenderStyles,
+  stylesToCssText,
+} from '../render/resolveStyles';
 
 const STORAGE_KEY = 'nodera_project_state_v1';
 
 export class StorageService {
+  /**
+   * Explicit, versioned migration.
+   *
+   * v1 -> v2 added per-breakpoint optical offsets, which is purely additive:
+   * a v1 document is already valid v2, so migration only stamps the version.
+   * No stored document is silently rewritten. Any future non-additive change
+   * gets its own branch here.
+   */
+  static migrateProject(project: ProjectState): ProjectState {
+    const version = project.schemaVersion ?? 1;
+    if (version >= CURRENT_SCHEMA_VERSION) return project;
+    return { ...project, schemaVersion: CURRENT_SCHEMA_VERSION };
+  }
+
   static loadProject(): ProjectState {
     try {
       const data = localStorage.getItem(STORAGE_KEY);
       if (data) {
-        return JSON.parse(data);
+        return StorageService.migrateProject(JSON.parse(data) as ProjectState);
       }
     } catch (e) {
       console.warn('Could not load saved project from localStorage:', e);
     }
-    return INITIAL_SPLOT_PROJECT;
+    return StorageService.migrateProject(INITIAL_SPLOT_PROJECT);
   }
 
   static saveProject(project: ProjectState): void {
@@ -61,52 +85,57 @@ export class StorageService {
   /**
    * Generates production-ready standalone HTML + CSS
    */
+  /**
+   * Standalone HTML for one page.
+   *
+   * Uses the same style resolver as the editor canvas, so an export can no
+   * longer drift from what the user approved on screen.
+   */
   static generateExportHtml(project: ProjectState, pageSlug: string): string {
     const dir = project.directions[project.activeDirectionId];
     const page = dir.pages[pageSlug] || Object.values(dir.pages)[0];
 
+    const escapeAttr = (value: string): string =>
+      value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
     const renderNodeHtml = (node: NodeElement): string => {
-      const stylesObj: Record<string, any> = { ...node.styles };
-      if (node.opticalOffset && (node.opticalOffset.x !== 0 || node.opticalOffset.y !== 0)) {
-        stylesObj.transform = `translate(${node.opticalOffset.x}px, ${node.opticalOffset.y}px)`;
-      }
-
-      const inlineStyle = Object.entries(stylesObj)
-        .map(([k, v]) => {
-          const cssKey = k.replace(/[A-Z]/g, m => `-${m.toLowerCase()}`);
-          return `${cssKey}: ${v};`;
-        })
-        .join(' ');
-
-      const childrenHtml = node.children ? node.children.map(renderNodeHtml).join('\n') : '';
+      // Export is the desktop rendering; responsive overrides stay in the
+      // document model rather than being baked into inline styles.
+      const inlineStyle = stylesToCssText(resolveRenderStyles(node, 'desktop'));
+      const attrs = `id="${escapeAttr(node.id)}" style="${escapeAttr(inlineStyle)}"`;
 
       if (node.tag === 'img') {
-        return `<img id="${node.id}" src="${node.src}" alt="${node.alt || ''}" style="${inlineStyle}" class="max-w-full" />`;
+        return `<img ${attrs} src="${escapeAttr(node.src || '')}" alt="${escapeAttr(node.alt || '')}" />`;
       }
       if (node.tag === 'input') {
-        return `<input id="${node.id}" placeholder="${node.name}" style="${inlineStyle}" class="outline-none" />`;
+        return `<input ${attrs} placeholder="${escapeAttr(node.content || node.name)}" />`;
       }
       if (node.tag === 'textarea') {
-        return `<textarea id="${node.id}" placeholder="${node.name}" style="${inlineStyle}" class="outline-none"></textarea>`;
+        return `<textarea ${attrs} placeholder="${escapeAttr(node.content || node.name)}"></textarea>`;
       }
+      if (isVoidTag(node.tag)) {
+        return `<${node.tag} ${attrs} />`;
+      }
+
+      const children = node.children?.length
+        ? node.children.map(renderNodeHtml).join('\n')
+        : node.content || '';
+
       if (node.tag === 'a') {
-        return `<a id="${node.id}" href="${node.href || '#'}" style="${inlineStyle}">${node.content || childrenHtml}</a>`;
+        return `<a ${attrs} href="${escapeAttr(node.href || '#')}">${children}</a>`;
       }
-
-      return `<${node.tag} id="${node.id}" style="${inlineStyle}">${node.content || ''}${childrenHtml}</${node.tag}>`;
+      return `<${node.tag} ${attrs}>${children}</${node.tag}>`;
     };
-
-    const bodyHtml = renderNodeHtml(page.root);
 
     return `<!DOCTYPE html>
 <html lang="pl">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${page.title}</title>
-  <meta name="description" content="${page.description}" />
-  <script src="https://cdn.tailwindcss.com"></script>
+  <title>${escapeAttr(page.title)}</title>
+  <meta name="description" content="${escapeAttr(page.description)}" />
   <style>
+    *, *::before, *::after { box-sizing: border-box; }
     body {
       background-color: ${project.tokens.surfaceColor};
       color: ${project.tokens.textColor};
@@ -115,10 +144,17 @@ export class StorageService {
       padding: 0;
       -webkit-font-smoothing: antialiased;
     }
+    img { max-width: 100%; }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.001ms !important;
+        transition-duration: 0.001ms !important;
+      }
+    }
   </style>
 </head>
 <body>
-  ${bodyHtml}
+  ${renderNodeHtml(page.root)}
 </body>
 </html>`;
   }

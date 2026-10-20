@@ -21,3 +21,16 @@
     background: #A86645;
   }
 }
+
+/* Respect the OS "reduce motion" setting across the whole editor chrome.
+   The rendered document gets the same rule inside its iframe and in export. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

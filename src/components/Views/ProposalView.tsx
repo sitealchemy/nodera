@@ -12,7 +12,8 @@ import {
   ChevronRight,
   ShieldCheck
 } from 'lucide-react';
-import { ProjectState, ProposalComment, ProposalSnapshot, NodeElement } from '../../types/document';
+import { ProjectState, ProposalComment, ProposalSnapshot } from '../../types/document';
+import { DocumentFrame } from '../../render/DocumentFrame';
 import { StorageService } from '../../services/storage';
 
 interface ProposalViewProps {
@@ -34,6 +35,7 @@ export const ProposalView: React.FC<ProposalViewProps> = ({
   const [authorName, setAuthorName] = useState('Klient (Magda)');
   const [targetElement, setTargetElement] = useState('Główna sekcja Hero');
   const [snapshotSuccess, setSnapshotSuccess] = useState(false);
+  const [snapshotHeight, setSnapshotHeight] = useState(1200);
 
   // Latest snapshot or fallback to active direction
   const activeSnapshot: ProposalSnapshot = project.snapshots[project.snapshots.length - 1] || {
@@ -77,25 +79,10 @@ export const ProposalView: React.FC<ProposalViewProps> = ({
     setTimeout(() => setSnapshotSuccess(false), 2500);
   };
 
-  // Render simplified read-only node
-  const renderReadOnlyNode = (node: NodeElement): React.ReactNode => {
-    const Tag = node.tag as any;
-    const style: React.CSSProperties = { ...node.styles } as React.CSSProperties;
-    if (node.opticalOffset) {
-      style.transform = `translate(${node.opticalOffset.x}px, ${node.opticalOffset.y}px)`;
-    }
-
-    if (node.tag === 'img') {
-      return <img key={node.id} src={node.src} alt={node.alt || ''} style={style} />;
-    }
-
-    return (
-      <Tag key={node.id} style={style}>
-        {node.content}
-        {node.children && node.children.map(c => renderReadOnlyNode(c))}
-      </Tag>
-    );
-  };
+  // The snapshot renders through the same frame as the editor canvas, so the
+  // proposal a client approves is the document, not a simplified lookalike.
+  // The old local renderer dropped href/alt, ignored responsive overrides and
+  // replaced (rather than composed) any transform the document already had.
 
   return (
     <div className="fixed inset-0 z-50 bg-[#F6F4EF] flex flex-col font-sans select-none overflow-hidden">
@@ -224,7 +211,15 @@ export const ProposalView: React.FC<ProposalViewProps> = ({
       {/* Main Clean Preview Area */}
       <div className="flex-1 overflow-y-auto p-6 flex justify-center bg-[#ECE8DF]">
         <div className="w-full max-w-5xl bg-[#FFFEFB] border border-[#DED9CF] rounded-2xl shadow-xl overflow-hidden min-h-[90vh]">
-          {renderReadOnlyNode(activePage.root)}
+          <DocumentFrame
+            key={activePage.slug}
+            root={activePage.root}
+            tokens={activeSnapshot.snapshotData.tokens}
+            device="desktop"
+            height={snapshotHeight}
+            onContentHeightChange={setSnapshotHeight}
+            style={{ width: '100%' }}
+          />
         </div>
       </div>
 

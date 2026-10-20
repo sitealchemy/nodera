@@ -63,7 +63,17 @@ export interface NodeElement {
     mobile?: Partial<ElementStyles>;
     tablet?: Partial<ElementStyles>;
   };
+  /** Optical offset shared by every screen size. */
   opticalOffset?: OpticalOffset;
+  /**
+   * Per-breakpoint optical offsets. A scope with no entry here falls back to
+   * `opticalOffset`, so documents written before this field existed are
+   * unaffected. Added in schema v2.
+   */
+  opticalOffsets?: {
+    mobile?: OpticalOffset;
+    tablet?: OpticalOffset;
+  };
   children?: NodeElement[];
   isLocked?: boolean;
 }
@@ -145,7 +155,19 @@ export interface PublishingCheckItem {
   fixAction?: string;
 }
 
+/**
+ * Current document schema version.
+ *
+ * v1 -> v2 added `NodeElement.opticalOffsets` (per-breakpoint optical offsets).
+ * The change is additive, so migration only stamps the version; no stored
+ * document is rewritten. Bump this and extend `migrateProject` for any change
+ * that is NOT backwards compatible.
+ */
+export const CURRENT_SCHEMA_VERSION = 2;
+
 export interface ProjectState {
+  /** Absent on documents saved before versioning; treated as v1. */
+  schemaVersion?: number;
   id: string;
   name: string;
   client: string;
