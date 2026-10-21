@@ -12,6 +12,13 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 3000,
+    watch: {
+      // Playwright writes its report, traces and screenshots into the project
+      // while it runs. Vite's watcher scans those directories as they are
+      // being rewritten, and the resulting FSWatcher error is unhandled —
+      // it takes the whole dev server down mid-run. None of it is source.
+      ignored: ['**/e2e-report/**', '**/e2e-results/**', '**/e2e-screenshots/**'],
+    },
   },
   test: {
     // Unit tests only. Playwright owns e2e/, and Vitest would otherwise collect
