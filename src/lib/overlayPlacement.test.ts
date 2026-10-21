@@ -117,3 +117,63 @@ describe('panToCentre', () => {
     expect(screenCentreY).toBeCloseTo(viewport.height / 2, 9);
   });
 });
+
+describe('label placement near the top edge', () => {
+  const labelSize = { width: 180, height: 20 };
+
+  // The regression: the label used placeNearSelection and then overrode the
+  // returned y with a raw `selection.y - height - 6`, bypassing the clamp, so
+  // a selection near the top pushed its label off the canvas.
+  it('never places the label above the usable area', () => {
+    for (const y of [-200, -40, 0, 4, 10, 30]) {
+      const placed = placeNearSelection({
+        selection: { x: 100, y, width: 300, height: 60 },
+        viewport,
+        insets,
+        size: labelSize,
+        gap: 6,
+        prefer: 'above',
+      });
+      expect(placed.y).toBeGreaterThanOrEqual(insets.top);
+      expect(placed.y + labelSize.height).toBeLessThanOrEqual(viewport.height - insets.bottom);
+    }
+  });
+
+  it('prefers above the selection when there is room', () => {
+    const placed = placeNearSelection({
+      selection: { x: 100, y: 300, width: 300, height: 0 },
+      viewport,
+      insets,
+      size: labelSize,
+      gap: 6,
+      prefer: 'above',
+    });
+    expect(placed.side).toBe('above');
+    expect(placed.y).toBe(300 - labelSize.height - 6);
+  });
+
+  it('falls back below when the top edge leaves no room', () => {
+    const placed = placeNearSelection({
+      selection: { x: 100, y: 8, width: 300, height: 0 },
+      viewport,
+      insets,
+      size: labelSize,
+      gap: 6,
+      prefer: 'above',
+    });
+    expect(placed.side).toBe('below');
+    expect(placed.y).toBeGreaterThanOrEqual(insets.top);
+  });
+
+  it('keeps label and action bar apart when both fit', () => {
+    const selection = { x: 100, y: 300, width: 300, height: 60 };
+    const label = placeNearSelection({
+      selection: { ...selection, height: 0 },
+      viewport, insets, size: labelSize, gap: 6, prefer: 'above',
+    });
+    const bar = placeNearSelection({
+      selection, viewport, insets, size: { width: 260, height: 32 }, prefer: 'below',
+    });
+    expect(label.y + labelSize.height).toBeLessThanOrEqual(bar.y);
+  });
+});

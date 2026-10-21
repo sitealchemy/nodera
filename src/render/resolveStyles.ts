@@ -8,11 +8,9 @@ import { ElementStyles, NodeElement, OpticalOffset, ResponsiveScope, ViewportDev
  * them at the same width.
  */
 
-export const VIEWPORT_WIDTHS: Record<ViewportDevice, number> = {
-  desktop: 1440,
-  tablet: 768,
-  mobile: 375,
-};
+// Re-exported from the single breakpoint definition so the editor, the
+// preview and the export cannot disagree about what each scope means.
+export { VIEWPORT_WIDTHS } from './breakpoints';
 
 /** The editing scope a viewport corresponds to, used to pick overrides. */
 export function scopeForViewport(device: ViewportDevice): ResponsiveScope {

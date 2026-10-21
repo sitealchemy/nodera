@@ -507,6 +507,7 @@ export const App: React.FC = () => {
           onSelectElement={setSelectedElementId}
           tokens={activeTokens}
           onUpdateTokens={handleUpdateTokens}
+          responsiveScope={responsiveScope}
         />
 
         {/* Must be a flex container: CanvasViewport sizes itself with flex-1,

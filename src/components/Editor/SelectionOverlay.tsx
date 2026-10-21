@@ -102,21 +102,24 @@ export const SelectionOverlay: React.FC<SelectionOverlayProps> = ({
     const label = labelRef.current;
     if (label) {
       const { width, height } = label.getBoundingClientRect();
-      // The label prefers the opposite side from the toolbar so the two do not
-      // stack on top of each other when space is tight.
+      // Anchored to the selection's TOP edge (zero height), so "below" means
+      // just under that edge and "above" means just over it.
+      //
+      // The returned y is used as-is. A previous version overrode it with a
+      // raw `selectScreen.y - height - 6`, which bypassed the clamping and
+      // pushed the label off the top of the canvas whenever the selection sat
+      // near the upper edge.
       const placed = placeNearSelection({
-        selection: {
-          ...selectScreen,
-          // Flip the anchor by treating the selection as zero-height at its top
-          // edge, which makes "below" resolve to just under the top edge.
-          height: 0,
-        },
+        selection: { ...selectScreen, height: 0 },
         viewport,
         insets,
         size: { width, height },
         gap: 6,
+        // Above the top edge is the natural place for a label; below it would
+        // sit on top of the element's own content.
+        prefer: 'above',
       });
-      setLabelPos({ x: placed.x, y: placed.side === 'below' ? selectScreen.y - height - 6 : placed.y });
+      setLabelPos({ x: placed.x, y: placed.y });
     }
   }, [
     selectScreen?.x,

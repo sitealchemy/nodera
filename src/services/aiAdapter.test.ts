@@ -252,3 +252,166 @@ describe('menu ordering', () => {
     expect(result.updatedProject).toBeUndefined();
   });
 });
+
+describe('stated numbers are obeyed', () => {
+  const sel = { selectedElementId: 'materia-hero-heading' }; // fontSize 56px
+
+  const sizeAfter = (p: ProjectState) =>
+    findNode(p.directions.materia.pages.start.root, 'materia-hero-heading')!.styles.fontSize;
+
+  it('powiększ o 50% applies 50%, not a fixed 20%', () => {
+    const r = AIAdapter.executeCommand('powiększ o 50%', ctx(sel), freshProject());
+    expect(r.kind).toBe('applied');
+    expect(sizeAfter(r.updatedProject!)).toBe('84px'); // 56 * 1.5
+  });
+
+  it('zmniejsz o 25% applies 25%', () => {
+    const r = AIAdapter.executeCommand('zmniejsz o 25%', ctx(sel), freshProject());
+    expect(sizeAfter(r.updatedProject!)).toBe('42px'); // 56 * 0.75
+  });
+
+  it('przesuń o 20 px w prawo moves exactly 20', () => {
+    const r = AIAdapter.executeCommand('przesuń o 20 px w prawo', ctx(sel), freshProject());
+    expect(r.kind).toBe('applied');
+    const n = findNode(r.updatedProject!.directions.materia.pages.start.root, 'materia-hero-heading')!;
+    expect(n.opticalOffset).toEqual({ x: 20, y: 0 });
+  });
+
+  it('przesuń o 2,5 px w lewo accepts a Polish decimal', () => {
+    const r = AIAdapter.executeCommand('przesuń o 2,5 px w lewo', ctx(sel), freshProject());
+    const n = findNode(r.updatedProject!.directions.materia.pages.start.root, 'materia-hero-heading')!;
+    expect(n.opticalOffset).toEqual({ x: -2.5, y: 0 });
+  });
+
+  it('moves down as well as sideways', () => {
+    const r = AIAdapter.executeCommand('przesuń o 3 px w dół', ctx(sel), freshProject());
+    const n = findNode(r.updatedProject!.directions.materia.pages.start.root, 'materia-hero-heading')!;
+    expect(n.opticalOffset).toEqual({ x: 0, y: 3 });
+  });
+
+  it('asks instead of guessing when no number is given', () => {
+    expect(AIAdapter.executeCommand('powiększ', ctx(sel), freshProject()).kind)
+      .toBe('needsClarification');
+    expect(AIAdapter.executeCommand('przesuń w lewo', ctx(sel), freshProject()).kind)
+      .toBe('needsClarification');
+  });
+
+  it('asks when the command names two directions', () => {
+    const r = AIAdapter.executeCommand('przesuń o 2px w lewo i w dół', ctx(sel), freshProject());
+    expect(r.kind).toBe('needsClarification');
+    expect(r.updatedProject).toBeUndefined();
+  });
+
+  it('refuses a unit it cannot honour for a nudge', () => {
+    const r = AIAdapter.executeCommand('przesuń o 2rem w lewo', ctx(sel), freshProject());
+    expect(r.kind).toBe('needsClarification');
+  });
+
+  it('refuses to scale a value whose unit it does not support', () => {
+    const before = freshProject();
+    findNode(before.directions.materia.pages.start.root, 'materia-hero-heading')!
+      .styles.fontSize = 'calc(1rem + 2vw)';
+    const r = AIAdapter.executeCommand('powiększ o 50%', ctx(sel), before);
+    expect(r.kind).toBe('unsupported');
+    expect(r.updatedProject).toBeUndefined();
+  });
+
+  it('refuses a percentage height rather than inventing pixels', () => {
+    const before = freshProject();
+    const n = findNode(before.directions.materia.pages.start.root, 'materia-hero-image')!;
+    delete n.styles.fontSize;
+    n.styles.height = '50%';
+    const r = AIAdapter.executeCommand(
+      'powiększ o 50%',
+      ctx({ selectedElementId: 'materia-hero-image' }),
+      before,
+    );
+    expect(r.kind).toBe('unsupported');
+  });
+
+  it('scaling by nothing is unchanged and creates no document', () => {
+    const before = freshProject();
+    findNode(before.directions.materia.pages.start.root, 'materia-hero-heading')!
+      .styles.fontSize = '0.0001px';
+    const r = AIAdapter.executeCommand('zmniejsz o 100%', ctx(sel), before);
+    expect(r.kind).toBe('unsupported');
+    expect(r.updatedProject).toBeUndefined();
+  });
+});
+
+describe('scope capability', () => {
+  it('refuses a structural command in a local scope, changing nothing', () => {
+    const before = freshProject();
+    const serialised = JSON.stringify(before);
+
+    const r = AIAdapter.executeCommand(
+      'kontakt na koniec menu',
+      ctx({ responsiveScope: 'mobile' }),
+      before,
+    );
+    expect(r.kind).toBe('needsClarification');
+    expect(r.updatedProject).toBeUndefined();
+    expect(r.summary).toMatch(/wspólna dla wszystkich ekranów/);
+    expect(JSON.stringify(before)).toBe(serialised);
+  });
+
+  it('refuses exposing the workshops section in a local scope', () => {
+    const r = AIAdapter.executeCommand(
+      'wyeksponuj warsztaty',
+      ctx({ responsiveScope: 'tablet' }),
+      freshProject(),
+    );
+    expect(r.kind).toBe('needsClarification');
+    expect(r.updatedProject).toBeUndefined();
+  });
+
+  it('mobile button colour writes overrides only', () => {
+    const before = freshProject();
+    const r = AIAdapter.executeCommand(
+      'zmień kolor przycisków na kobaltowy',
+      ctx({ responsiveScope: 'mobile' }),
+      before,
+    );
+    expect(r.kind).toBe('applied');
+    const after = r.updatedProject!;
+
+    // The shared token is untouched...
+    expect(after.directions.materia.tokens!.accentCopper).toBe('#A86645');
+    // ...the other directions are untouched...
+    expect(after.directions.pracownia.tokens!.accentCopper).toBe('#A86645');
+    expect(after.directions.rytm.tokens!.accentCopper).toBe('#A86645');
+
+    // ...the shared style stays, and only the mobile override changes.
+    const btn = findNode(after.directions.materia.pages.start.root, 'materia-hero-cta-primary')!;
+    expect(btn.styles.backgroundColor).toBe('#A86645');
+    expect(btn.responsiveOverrides?.mobile?.backgroundColor).toBe('#24486E');
+    expect(btn.responsiveOverrides?.tablet).toBeUndefined();
+  });
+
+  it('a repeated mobile colour command is unchanged', () => {
+    const first = AIAdapter.executeCommand(
+      'zmień kolor przycisków na kobaltowy',
+      ctx({ responsiveScope: 'mobile' }),
+      freshProject(),
+    );
+    const second = AIAdapter.executeCommand(
+      'zmień kolor przycisków na kobaltowy',
+      ctx({ responsiveScope: 'mobile' }),
+      first.updatedProject!,
+    );
+    expect(second.kind).toBe('unchanged');
+    expect(second.updatedProject).toBeUndefined();
+  });
+
+  it('command and manual edit write to the same place for the same scope', () => {
+    // Manual editing writes responsiveOverrides[scope]; so must the command.
+    const r = AIAdapter.executeCommand(
+      'powiększ o 50%',
+      ctx({ selectedElementId: 'materia-hero-heading', responsiveScope: 'tablet' }),
+      freshProject(),
+    );
+    const n = findNode(r.updatedProject!.directions.materia.pages.start.root, 'materia-hero-heading')!;
+    expect(n.responsiveOverrides?.tablet?.fontSize).toBe('84px');
+    expect(n.styles.fontSize).toBe('56px');
+  });
+});

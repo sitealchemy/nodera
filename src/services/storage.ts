@@ -5,11 +5,7 @@ import {
   ProposalSnapshot,
 } from '../types/document';
 import { INITIAL_SPLOT_PROJECT } from '../data/splotDemo';
-import {
-  isVoidTag,
-  resolveRenderStyles,
-  stylesToCssText,
-} from '../render/resolveStyles';
+import { pageFilenameFor, renderPageHtml } from '../render/exportHtml';
 
 const STORAGE_KEY = 'nodera_project_state_v1';
 
@@ -110,75 +106,36 @@ export class StorageService {
   /**
    * Standalone HTML for one page.
    *
-   * Uses the same style resolver as the editor canvas, so an export can no
-   * longer drift from what the user approved on screen.
+   * Delegates to the shared exporter, which emits a real stylesheet with
+   * breakpoint rules rather than inline styles, escapes author text, and
+   * validates tags and URLs.
    */
   static generateExportHtml(project: ProjectState, pageSlug: string): string {
     const dir = project.directions[project.activeDirectionId];
     const page = dir.pages[pageSlug] || Object.values(dir.pages)[0];
     const tokens = StorageService.activeTokens(project);
 
-    const escapeAttr = (value: string): string =>
-      value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return renderPageHtml(page, tokens, {
+      knownSlugs: Object.keys(dir.pages),
+      pageFilename: pageFilenameFor,
+      partOfBundle: false,
+    });
+  }
 
-    const renderNodeHtml = (node: NodeElement): string => {
-      // Export is the desktop rendering; responsive overrides stay in the
-      // document model rather than being baked into inline styles.
-      const inlineStyle = stylesToCssText(resolveRenderStyles(node, 'desktop'));
-      const attrs = `id="${escapeAttr(node.id)}" style="${escapeAttr(inlineStyle)}"`;
+  /** Every page of the active direction, as a navigable set of files. */
+  static generateSiteExport(project: ProjectState): Record<string, string> {
+    const dir = project.directions[project.activeDirectionId];
+    const tokens = StorageService.activeTokens(project);
+    const knownSlugs = Object.keys(dir.pages);
 
-      if (node.tag === 'img') {
-        return `<img ${attrs} src="${escapeAttr(node.src || '')}" alt="${escapeAttr(node.alt || '')}" />`;
-      }
-      if (node.tag === 'input') {
-        return `<input ${attrs} placeholder="${escapeAttr(node.content || node.name)}" />`;
-      }
-      if (node.tag === 'textarea') {
-        return `<textarea ${attrs} placeholder="${escapeAttr(node.content || node.name)}"></textarea>`;
-      }
-      if (isVoidTag(node.tag)) {
-        return `<${node.tag} ${attrs} />`;
-      }
-
-      const children = node.children?.length
-        ? node.children.map(renderNodeHtml).join('\n')
-        : node.content || '';
-
-      if (node.tag === 'a') {
-        return `<a ${attrs} href="${escapeAttr(node.href || '#')}">${children}</a>`;
-      }
-      return `<${node.tag} ${attrs}>${children}</${node.tag}>`;
-    };
-
-    return `<!DOCTYPE html>
-<html lang="pl">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${escapeAttr(page.title)}</title>
-  <meta name="description" content="${escapeAttr(page.description)}" />
-  <style>
-    *, *::before, *::after { box-sizing: border-box; }
-    body {
-      background-color: ${tokens.surfaceColor};
-      color: ${tokens.textColor};
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      margin: 0;
-      padding: 0;
-      -webkit-font-smoothing: antialiased;
-    }
-    img { max-width: 100%; }
-    @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after {
-        animation-duration: 0.001ms !important;
-        transition-duration: 0.001ms !important;
-      }
-    }
-  </style>
-</head>
-<body>
-  ${renderNodeHtml(page.root)}
-</body>
-</html>`;
+    const files: Record<string, string> = {};
+    Object.values(dir.pages).forEach((page) => {
+      files[pageFilenameFor(page.slug)] = renderPageHtml(page, tokens, {
+        knownSlugs,
+        pageFilename: pageFilenameFor,
+        partOfBundle: true,
+      });
+    });
+    return files;
   }
 }

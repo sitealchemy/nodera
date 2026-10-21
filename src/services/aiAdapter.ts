@@ -1,5 +1,25 @@
 import { ProjectState, NodeElement, ResponsiveScope } from '../types/document';
 import { resolveOpticalOffset } from '../render/resolveStyles';
+import {
+  Direction,
+  SCALABLE_UNITS,
+  directionDelta,
+  formatCssLength,
+  parseCssLength,
+  parseDirection,
+  parseGrowShrink,
+  parsePercent,
+  parsePixels,
+  scaleLength,
+} from './commandValues';
+import { OperationKind, SCOPE_NAME, checkScope } from './scopeCapability';
+
+const DIRECTION_LABEL: Record<Direction, string> = {
+  left: 'w lewo',
+  right: 'w prawo',
+  up: 'w górę',
+  down: 'w dół',
+};
 
 /**
  * DEMONSTRATION COMMAND PARSER — not a language model.
@@ -109,6 +129,12 @@ export class AIAdapter {
       node.responsiveOverrides[scope] = { ...node.responsiveOverrides[scope], ...patch };
     };
 
+    /** Styles that actually apply at the current scope. */
+    const effectiveStyles = (node: NodeElement) =>
+      scope !== 'all' && node.responsiveOverrides?.[scope]
+        ? { ...node.styles, ...node.responsiveOverrides[scope] }
+        : node.styles;
+
     const applied = (summary: string): AIExecutionResult => ({
       kind: 'applied',
       summary,
@@ -117,30 +143,48 @@ export class AIAdapter {
       updatedProject: cloned,
     });
 
-    const scopeNote =
-      scope === 'all' ? '' : ` (zakres: ${scope === 'mobile' ? 'małe ekrany' : 'tablety'})`;
+    const unchangedResult = (summary: string, note?: string): AIExecutionResult => ({
+      kind: 'unchanged',
+      summary,
+      detailedSteps: note ? [note] : [],
+      affectedElementIds: affectedIds,
+    });
 
-    // CASE 1: expose the workshops section
+    /** Refusal for an operation that cannot honour the selected scope. */
+    const scopeRefusal = (kind: OperationKind): AIExecutionResult | null => {
+      const check = checkScope(kind, scope);
+      if (check.allowed) return null;
+      return {
+        kind: 'needsClarification',
+        summary: check.reason!,
+        detailedSteps: [check.hint!],
+        affectedElementIds: [],
+      };
+    };
+
+    const scopeNote = scope === 'all' ? '' : ` (zakres: ${SCOPE_NAME[scope]})`;
+
+    // CASE 1: expose the workshops section — structural, not scopable
     if (p.includes('warsztat') && (p.includes('eksponuj') || p.includes('wyżej') || p.includes('pokaż'))) {
+      const refusal = scopeRefusal('structure');
+      if (refusal) return refusal;
+
       const rootChildren = activePage.root.children ?? [];
       const workshopIndex = rootChildren.findIndex((n) => n.id.includes('workshop'));
       const heroIndex = rootChildren.findIndex((n) => n.id.includes('hero'));
 
       if (workshopIndex === -1 || heroIndex === -1) {
-        return {
-          kind: 'unchanged',
-          summary: 'Ta podstrona nie ma sekcji warsztatów do wyeksponowania.',
-          detailedSteps: [`Sprawdzono podstronę: ${activePage.name}.`],
-          affectedElementIds: [],
-        };
+        return unchangedResult(
+          'Ta podstrona nie ma sekcji warsztatów do wyeksponowania.',
+          `Sprawdzono podstronę: ${activePage.name}.`,
+        );
       }
       if (workshopIndex <= heroIndex) {
-        return {
-          kind: 'unchanged',
-          summary: 'Sekcja warsztatów jest już wyeksponowana.',
-          detailedSteps: ['Znajduje się bezpośrednio pod główną sekcją.'],
-          affectedElementIds: [rootChildren[workshopIndex].id],
-        };
+        affectedIds.push(rootChildren[workshopIndex].id);
+        return unchangedResult(
+          'Sekcja warsztatów jest już wyeksponowana.',
+          'Znajduje się bezpośrednio pod główną sekcją.',
+        );
       }
 
       const [wsNode] = rootChildren.splice(workshopIndex, 1);
@@ -166,7 +210,7 @@ export class AIAdapter {
       return applied('Wyeksponowano sekcję warsztatów na stronie głównej.');
     }
 
-    // CASE 2: recolour buttons via the direction's accent token
+    // CASE 2: recolour buttons — a style operation, so it honours the scope
     if (p.includes('kolor') && (p.includes('przycisk') || p.includes('cta') || p.includes('token'))) {
       const palette: [string[], string, string][] = [
         [['kobalt', 'niebiesk'], '#24486E', 'głęboki kobalt'],
@@ -185,92 +229,179 @@ export class AIAdapter {
       }
       const [, targetColor, colorName] = match;
 
-      const currentTokens = activeDirection.tokens ?? cloned.tokens;
-      if (currentTokens.accentCopper.toLowerCase() === targetColor.toLowerCase()) {
-        return {
-          kind: 'unchanged',
-          summary: `Przyciski już mają kolor ${colorName}.`,
-          detailedSteps: [],
-          affectedElementIds: [],
-        };
+      const isButton = (node: NodeElement) =>
+        node.tag === 'button' || node.tokenRef === 'buttonPrimary';
+
+      if (scope === 'all') {
+        const currentTokens = activeDirection.tokens ?? cloned.tokens;
+        if (currentTokens.accentCopper.toLowerCase() === targetColor.toLowerCase()) {
+          return unchangedResult(`Przyciski już mają kolor ${colorName}.`);
+        }
+
+        // Only this direction is touched; the others keep their own look.
+        const nextTokens = { ...currentTokens, accentCopper: targetColor };
+        activeDirection.tokens = nextTokens;
+        cloned.tokens = nextTokens;
+
+        Object.values(activeDirection.pages).forEach((page) => {
+          const walk = (node: NodeElement) => {
+            if (isButton(node)) {
+              node.styles.backgroundColor = targetColor;
+              affectedIds.push(node.id);
+            }
+            node.children?.forEach(walk);
+          };
+          walk(page.root);
+        });
+
+        steps.push(`Zmieniono wspólny token koloru przycisków na ${colorName} (${targetColor}).`);
+        steps.push(
+          `Zastosowano na ${Object.keys(activeDirection.pages).length} podstronach kierunku ${activeDirection.name}.`,
+        );
+        steps.push('Pozostałe kierunki zachowały swój wygląd.');
+        return applied(`Zmieniono kolor przycisków na ${colorName}.`);
       }
 
-      // Only this direction is touched; the others keep their own look.
-      const nextTokens = { ...currentTokens, accentCopper: targetColor };
-      activeDirection.tokens = nextTokens;
-      cloned.tokens = nextTokens;
-
+      // Local scope: write overrides only. The shared token and every other
+      // direction are left exactly as they were.
+      let changed = 0;
       Object.values(activeDirection.pages).forEach((page) => {
         const walk = (node: NodeElement) => {
-          if (node.tag === 'button' || node.tokenRef === 'buttonPrimary') {
-            node.styles.backgroundColor = targetColor;
-            affectedIds.push(node.id);
+          if (isButton(node)) {
+            const current = node.responsiveOverrides?.[scope]?.backgroundColor;
+            if (String(current ?? '').toLowerCase() !== targetColor.toLowerCase()) {
+              node.responsiveOverrides = node.responsiveOverrides ?? {};
+              node.responsiveOverrides[scope] = {
+                ...node.responsiveOverrides[scope],
+                backgroundColor: targetColor,
+              };
+              changed += 1;
+              affectedIds.push(node.id);
+            }
           }
           node.children?.forEach(walk);
         };
         walk(page.root);
       });
 
-      steps.push(`Zmieniono token koloru przycisków na ${colorName} (${targetColor}).`);
-      steps.push(
-        `Zastosowano na ${Object.keys(activeDirection.pages).length} podstronach kierunku ${activeDirection.name}.`
-      );
-      steps.push('Pozostałe kierunki zachowały swój wygląd.');
-      return applied(`Zmieniono kolor przycisków na ${colorName}.`);
+      if (changed === 0) {
+        return unchangedResult(`Przyciski już mają kolor ${colorName}${scopeNote}.`);
+      }
+
+      steps.push(`Dodano nadpisanie koloru przycisków${scopeNote}: ${colorName} (${targetColor}).`);
+      steps.push('Wspólny token i pozostałe zakresy pozostały bez zmian.');
+      return applied(`Zmieniono kolor przycisków na ${colorName}${scopeNote}.`);
     }
 
-    // CASE 3: resize the selected element
-    if (p.includes('powiększ') || p.includes('zwiększ') || p.includes('pomniejsz') || p.includes('zmniejsz')) {
+    // CASE 3: resize the selected element by a stated percentage
+    const growShrink = parseGrowShrink(p);
+    if (growShrink) {
       if (!context.selectedElementId) return needsSelection('który chcesz przeskalować');
       const targetNode = findNode(activePage.root, context.selectedElementId);
       if (!targetNode) return needsSelection('który chcesz przeskalować');
 
-      const grow = p.includes('powiększ') || p.includes('zwiększ');
-      const factor = grow ? 1.2 : 0.8;
-      const percentStr = grow ? '+20%' : '-20%';
-
-      const effective =
-        scope !== 'all' && targetNode.responsiveOverrides?.[scope]
-          ? { ...targetNode.styles, ...targetNode.responsiveOverrides[scope] }
-          : targetNode.styles;
-
-      if (effective.fontSize) {
-        const current = parseInt(effective.fontSize, 10) || 16;
-        const next = Math.max(1, Math.round(current * factor));
-        writeStyle(targetNode, { fontSize: `${next}px` });
-        steps.push(`Rozmiar tekstu: ${current}px → ${next}px (${percentStr})${scopeNote}.`);
-      } else if (effective.height) {
-        const current = parseInt(effective.height, 10) || 300;
-        const next = Math.max(1, Math.round(current * factor));
-        writeStyle(targetNode, { height: `${next}px` });
-        steps.push(`Wysokość: ${current}px → ${next}px (${percentStr})${scopeNote}.`);
-      } else {
+      const percent = parsePercent(p);
+      if (!percent.ok) {
         return {
-          kind: 'unchanged',
-          summary: `Element ${targetNode.name} nie ma rozmiaru, który mógłbym przeskalować.`,
-          detailedSteps: ['Brak ustawionego fontSize ani height.'],
+          kind: 'needsClarification',
+          summary:
+            percent.reason === 'ambiguous'
+              ? 'Polecenie zawiera kilka wartości procentowych.'
+              : 'O ile procent zmienić rozmiar?',
+          detailedSteps: [
+            percent.reason === 'invalid'
+              ? 'Podaj wartość z zakresu 1–1000%.'
+              : 'Napisz np. „powiększ o 50%" albo „zmniejsz o 25%".',
+          ],
           affectedElementIds: [targetNode.id],
         };
       }
 
+      const delta = growShrink === 'grow' ? percent.value : -percent.value;
+      const styles = effectiveStyles(targetNode);
+
+      // The active action decides which property is meant when both exist.
+      const property =
+        context.actionType === 'position'
+          ? null
+          : styles.fontSize
+            ? 'fontSize'
+            : styles.height
+              ? 'height'
+              : styles.width
+                ? 'width'
+                : null;
+
+      if (!property) {
+        return unchangedResult(
+          `Element ${targetNode.name} nie ma rozmiaru, który mógłbym przeskalować.`,
+          'Brak ustawionego fontSize, height ani width.',
+        );
+      }
+
+      // A percentage height scaled by a percentage is relative to a container
+      // we cannot see from here, so it is refused rather than guessed.
+      const current = parseCssLength(styles[property] as string);
+      if (current && current.unit === '%' && property !== 'fontSize') {
+        return {
+          kind: 'unsupported',
+          summary: `Nie mogę przeskalować wartości procentowej (${styles[property]}) bez kontekstu rodzica.`,
+          detailedSteps: ['Ustaw rozmiar w px, rem lub em, albo zmień go ręcznie w inspektorze.'],
+          affectedElementIds: [targetNode.id],
+        };
+      }
+
+      const outcome = scaleLength(styles[property] as string, delta);
+      if (!outcome.ok) {
+        if (outcome.reason === 'unsupported-unit') {
+          return {
+            kind: 'unsupported',
+            summary: `Nie obsługuję jednostki w wartości ${styles[property]}.`,
+            detailedSteps: [`Obsługiwane jednostki: ${SCALABLE_UNITS.join(', ')}.`],
+            affectedElementIds: [targetNode.id],
+          };
+        }
+        if (outcome.reason === 'out-of-range') {
+          return {
+            kind: 'unsupported',
+            summary: `Wynik zmiany o ${delta}% nie jest poprawnym rozmiarem.`,
+            detailedSteps: ['Rozmiar musi pozostać większy od zera.'],
+            affectedElementIds: [targetNode.id],
+          };
+        }
+        return {
+          kind: 'unsupported',
+          summary: `Nie potrafię odczytać wartości ${String(styles[property])}.`,
+          detailedSteps: [],
+          affectedElementIds: [targetNode.id],
+        };
+      }
+
+      if (outcome.unchanged) {
+        affectedIds.push(targetNode.id);
+        return unchangedResult(
+          `Rozmiar ${targetNode.name} pozostaje bez zmian.`,
+          `${formatCssLength(outcome.next)} to ta sama wartość co obecna.`,
+        );
+      }
+
+      const before = styles[property] as string;
+      writeStyle(targetNode, { [property]: formatCssLength(outcome.next) });
+      steps.push(
+        `${property}: ${before} → ${formatCssLength(outcome.next)} (${delta > 0 ? '+' : ''}${delta}%)${scopeNote}.`,
+      );
       affectedIds.push(targetNode.id);
-      return applied(`Zmieniono rozmiar ${targetNode.name} o ${percentStr}.`);
+      return applied(`Zmieniono rozmiar ${targetNode.name} o ${delta > 0 ? '+' : ''}${delta}%.`);
     }
 
-    // CASE 4: optical nudge
-    if (p.includes('korekt') || p.includes('przesuń') || p.includes('offset') || /\d\s*px/.test(p)) {
+    // CASE 4: optical nudge by a stated distance
+    if (p.includes('korekt') || p.includes('przesuń') || p.includes('przesun') || p.includes('offset')) {
       if (!context.selectedElementId) return needsSelection('który chcesz przesunąć');
       const targetNode = findNode(activePage.root, context.selectedElementId);
       if (!targetNode) return needsSelection('który chcesz przesunąć');
 
-      let dx = 0;
-      let dy = 0;
-      if (p.includes('lewo')) dx -= 1;
-      if (p.includes('prawo')) dx += 1;
-      if (p.includes('gór') || p.includes('gora')) dy -= 1;
-      if (p.includes('dół') || p.includes('dol')) dy += 1;
-
-      if (dx === 0 && dy === 0) {
+      const direction = parseDirection(p);
+      if (direction === null) {
         return {
           kind: 'needsClarification',
           summary: 'W którą stronę przesunąć element?',
@@ -278,10 +409,44 @@ export class AIAdapter {
           affectedElementIds: [targetNode.id],
         };
       }
+      if (direction === 'ambiguous') {
+        return {
+          kind: 'needsClarification',
+          summary: 'Polecenie wskazuje więcej niż jeden kierunek.',
+          detailedSteps: ['Wykonaj przesunięcie w jednej osi naraz.'],
+          affectedElementIds: [targetNode.id],
+        };
+      }
 
-      // Same scope rules as the inspector's directional pad.
+      // Pixels only: an optical offset is a pixel nudge by definition.
+      const distance = parsePixels(p, true);
+      if (!distance.ok) {
+        const summary =
+          distance.reason === 'ambiguous'
+            ? 'Polecenie zawiera kilka wartości.'
+            : distance.reason === 'invalid'
+              ? 'Korekta optyczna działa w pikselach.'
+              : 'O ile pikseli przesunąć element?';
+        return {
+          kind: 'needsClarification',
+          summary,
+          detailedSteps: ['Napisz np. „przesuń o 20 px w prawo" albo „przesuń o 2,5 px w lewo".'],
+          affectedElementIds: [targetNode.id],
+        };
+      }
+
+      if (distance.value === 0) {
+        affectedIds.push(targetNode.id);
+        return unchangedResult('Przesunięcie o 0 px nic nie zmienia.');
+      }
+
+      const { x: dx, y: dy } = directionDelta(direction, distance.value);
       const current = resolveOpticalOffset(targetNode, scope) ?? { x: 0, y: 0 };
-      const next = { x: current.x + dx, y: current.y + dy };
+      const next = {
+        x: Math.round((current.x + dx) * 1000) / 1000,
+        y: Math.round((current.y + dy) * 1000) / 1000,
+      };
+
       if (scope === 'all') {
         targetNode.opticalOffset = next;
       } else {
@@ -292,36 +457,27 @@ export class AIAdapter {
       steps.push(`Korekta optyczna: X ${next.x}px, Y ${next.y}px${scopeNote}.`);
       steps.push('Zmiana nie rozpycha sąsiadujących elementów.');
       affectedIds.push(targetNode.id);
-      return applied(`Przesunięto ${targetNode.name} o ${dx}px / ${dy}px.`);
+      return applied(
+        `Przesunięto ${targetNode.name} o ${distance.value}px (${DIRECTION_LABEL[direction]}).`,
+      );
     }
 
-    // CASE 5: move Kontakt to the end of the nav
+    // CASE 5: move Kontakt to the end of the nav — structural, not scopable
     if (p.includes('kontakt') && p.includes('koniec')) {
+      const refusal = scopeRefusal('structure');
+      if (refusal) return refusal;
+
       const navNode = findNode(activePage.root, 'materia-menu');
       if (!navNode?.children?.length) {
-        return {
-          kind: 'unchanged',
-          summary: 'Ta podstrona nie ma menu głównego do uporządkowania.',
-          detailedSteps: [],
-          affectedElementIds: [],
-        };
+        return unchangedResult('Ta podstrona nie ma menu głównego do uporządkowania.');
       }
       const idx = navNode.children.findIndex((c) => c.name.toLowerCase().includes('kontakt'));
       if (idx === -1) {
-        return {
-          kind: 'unchanged',
-          summary: 'W menu nie ma pozycji Kontakt.',
-          detailedSteps: [],
-          affectedElementIds: [],
-        };
+        return unchangedResult('W menu nie ma pozycji Kontakt.');
       }
       if (idx === navNode.children.length - 1) {
-        return {
-          kind: 'unchanged',
-          summary: 'Pozycja Kontakt jest już na końcu menu.',
-          detailedSteps: [],
-          affectedElementIds: [navNode.children[idx].id],
-        };
+        affectedIds.push(navNode.children[idx].id);
+        return unchangedResult('Pozycja Kontakt jest już na końcu menu.');
       }
       const [item] = navNode.children.splice(idx, 1);
       navNode.children.push(item);

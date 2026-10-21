@@ -5,8 +5,10 @@ import {
   DirectionOption,
   NodeElement,
   PageDocument,
+  ResponsiveScope,
 } from '../../types/document';
 import { CERAMIC_IMAGES } from '../../data/splotDemo';
+import { SCOPE_NAME } from '../../services/scopeCapability';
 
 /**
  * Edge rail plus a single drawer.
@@ -37,6 +39,8 @@ export interface DrawerRailProps {
 
   tokens: DesignTokens;
   onUpdateTokens: (delta: Partial<DesignTokens>) => void;
+  /** Shown so the token control cannot imply a locality it does not have. */
+  responsiveScope: ResponsiveScope;
 }
 
 const RAIL_ITEMS: { id: DrawerId; icon: React.ElementType; label: string }[] = [
@@ -70,7 +74,13 @@ export const DrawerRail: React.FC<DrawerRailProps> = ({
   onSelectElement,
   tokens,
   onUpdateTokens,
+  responsiveScope,
 }) => {
+  // Global tokens are a property of the direction, not of a breakpoint. With a
+  // local scope selected the control would otherwise look like a local edit
+  // while changing every screen, so it says plainly what it does.
+  const tokensAreShared = true;
+  const scopeMismatch = responsiveScope !== 'all' && tokensAreShared;
   const renderTree = (node: NodeElement, depth = 0): React.ReactNode => {
     const isSelected = selectedElementId === node.id;
     return (
@@ -202,6 +212,23 @@ export const DrawerRail: React.FC<DrawerRailProps> = ({
 
             {openDrawer === 'styles' && (
               <div className="space-y-4">
+                <div
+                  className={`p-2 rounded-lg border text-[10px] leading-snug ${
+                    scopeMismatch
+                      ? 'bg-amber-50 border-amber-200 text-amber-800'
+                      : 'bg-[#F6F4EF] border-[#DED9CF] text-[#706C65]'
+                  }`}
+                >
+                  {scopeMismatch ? (
+                    <>
+                      Zakres edycji to „{SCOPE_NAME[responsiveScope]}", ale te style są
+                      <strong> wspólne dla wszystkich ekranów</strong> w tym kierunku. Zmiana tutaj
+                      dotyczy całego projektu, nie tylko wybranego zakresu.
+                    </>
+                  ) : (
+                    <>Zmiana dotyczy wszystkich ekranów w aktywnym kierunku.</>
+                  )}
+                </div>
                 <div className="space-y-1.5">
                   <label className="text-[#292824] font-medium block">Kolor akcentu (przyciski)</label>
                   <div className="flex items-center gap-2">

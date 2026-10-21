@@ -99,13 +99,19 @@ describe('generateExportHtml', () => {
     expect(StorageService.generateExportHtml(p, 'start')).toContain('#102030');
   });
 
-  it('escapes attribute values rather than emitting them raw', () => {
+  it('escapes title as text and description as an attribute', () => {
     const p = StorageService.migrateProject(clone(INITIAL_SPLOT_PROJECT));
     const page = p.directions[p.activeDirectionId].pages.start;
     page.title = 'Splot "ceramika" & <spółka>';
+    page.description = 'Opis z "cudzysłowem" i <tagiem>';
 
     const html = StorageService.generateExportHtml(p, 'start');
-    expect(html).toContain('&quot;');
+
+    // <title> is a text context: markup must be escaped, quotes need not be.
+    expect(html).toContain('&lt;spółka&gt;');
     expect(html).not.toContain('<spółka>');
+    // The meta description is an attribute, so its quotes must be escaped or
+    // it would close its own value.
+    expect(html).toContain('&quot;cudzysłowem&quot;');
   });
 });

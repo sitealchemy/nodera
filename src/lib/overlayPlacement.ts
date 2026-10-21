@@ -26,6 +26,11 @@ export interface PlacementInput {
   size: { width: number; height: number };
   /** Gap between the selection edge and the floating element. */
   gap?: number;
+  /**
+   * Which side to try first. The action bar reads better below the element,
+   * the label above it; both fall back to the other side, then to overlapping.
+   */
+  prefer?: 'below' | 'above';
 }
 
 export interface Placement {
@@ -56,6 +61,7 @@ export function placeNearSelection({
   insets,
   size,
   gap = 8,
+  prefer = 'below',
 }: PlacementInput): Placement {
   const minX = insets.left;
   const maxX = viewport.width - insets.right - size.width;
@@ -68,12 +74,17 @@ export function placeNearSelection({
   let y: number;
   let side: Placement['side'];
 
-  if (below <= maxY) {
-    y = below;
-    side = 'below';
-  } else if (above >= minY) {
-    y = above;
-    side = 'above';
+  const belowFits = below <= maxY && below >= minY;
+  const aboveFits = above >= minY && above <= maxY;
+  const first = prefer === 'above' ? aboveFits : belowFits;
+  const second = prefer === 'above' ? belowFits : aboveFits;
+
+  if (first) {
+    y = prefer === 'above' ? above : below;
+    side = prefer;
+  } else if (second) {
+    y = prefer === 'above' ? below : above;
+    side = prefer === 'above' ? 'below' : 'above';
   } else {
     // Neither side fits: sit just inside the selection's top edge, clamped so
     // it stays on screen even when the selection starts above the viewport.
