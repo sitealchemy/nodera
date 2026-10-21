@@ -348,6 +348,24 @@ export const App: React.FC = () => {
     [project, commitProjectUpdate],
   );
 
+  /**
+   * The editor shell behind an open modal is marked `inert`.
+   *
+   * Blocking the app's own shortcuts is not enough: the browser keeps its own
+   * undo stack, and Ctrl+Z with focus on <body> re-focuses the last edited
+   * field — the inspector's textarea, still mounted behind the dialog — and
+   * reverts it, which fires onChange and silently rewrites the document.
+   * `inert` removes the background from focus and interaction entirely, so
+   * there is nothing there for the browser to undo into.
+   */
+  const shellRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const shell = shellRef.current;
+    if (!shell) return;
+    if (isModalOpen) shell.setAttribute('inert', '');
+    else shell.removeAttribute('inert');
+  }, [isModalOpen]);
+
   // --- Keyboard ------------------------------------------------------------
   const selectedIdRef = useRef(selectedElementId);
   selectedIdRef.current = selectedElementId;
@@ -359,6 +377,25 @@ export const App: React.FC = () => {
       // A modal owns the keyboard while it is open: editor shortcuts must not
       // reach through and modify the page behind it.
       if (isModalOpen) return;
+
+      // Escape is handled before the text-entry guard. It is a dismiss key,
+      // not a typing key, so it must still close an open action while the
+      // caret sits in the inspector's own field — otherwise the action the
+      // user just opened cannot be closed from the keyboard at all.
+      // Fields that need Escape for themselves (the command dock) stop the
+      // event before it reaches this window listener.
+      if (event.key === 'Escape') {
+        if (activeAction) {
+          setActiveAction(null);
+          (document.activeElement as HTMLElement | null)?.blur?.();
+        } else if (selectedIdRef.current) {
+          setSelectedElementId(null);
+        } else if (openDrawer) {
+          setOpenDrawer(null);
+        }
+        return;
+      }
+
       if (isTextEntryTarget(event.target)) return;
 
       const mod = event.metaKey || event.ctrlKey;
@@ -371,13 +408,6 @@ export const App: React.FC = () => {
       if (mod && event.key.toLowerCase() === 'y') {
         event.preventDefault();
         handleRedo();
-        return;
-      }
-
-      if (event.key === 'Escape') {
-        if (activeAction) setActiveAction(null);
-        else if (selectedIdRef.current) setSelectedElementId(null);
-        else if (openDrawer) setOpenDrawer(null);
         return;
       }
 
@@ -469,6 +499,7 @@ export const App: React.FC = () => {
 
   return (
     <div className="h-screen w-screen flex flex-col bg-[#F6F4EF] text-[#292824] overflow-hidden font-sans">
+      <div ref={shellRef} className="flex-1 flex flex-col min-h-0">
       <EditorHeader
         projectName={project.name}
         pages={pages}
@@ -558,6 +589,8 @@ export const App: React.FC = () => {
             onResetNudge={handleResetNudge}
           />
         )}
+      </div>
+
       </div>
 
       {isProposalOpen && (

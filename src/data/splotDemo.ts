@@ -64,6 +64,13 @@ const createMateriaPages = (): Record<string, PageDocument> => {
                 tag: 'nav',
                 type: 'container',
                 styles: { display: 'flex', gap: '32px', fontSize: '14px', fontWeight: '500' },
+                // At 375px the row of four links is 319px wide and sits after
+                // the logo, so the last two were clipped off the right edge.
+                // Wrapping is the document's own fix, expressed through the
+                // same responsive override the editor writes.
+                responsiveOverrides: {
+                  mobile: { flexWrap: 'wrap', gap: '12px 18px', fontSize: '13px' },
+                },
                 children: [
                   { id: 'nav-item-1', name: 'Link Start', tag: 'a', type: 'text', content: 'Kolekcje', href: '#kolekcje', styles: { color: '#292824' } },
                   { id: 'nav-item-2', name: 'Link Warsztaty', tag: 'a', type: 'text', content: 'Warsztaty', href: '/warsztaty', styles: { color: '#292824' } },

@@ -7,3 +7,8 @@ dist/
 # This project uses bun; bun.lock is the canonical lockfile.
 # An npm run here would otherwise add a second, competing lockfile.
 package-lock.json
+
+# Playwright artefacts
+e2e-results/
+e2e-report/
+e2e-screenshots/

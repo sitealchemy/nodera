@@ -165,7 +165,10 @@ export const CommandDock: React.FC<CommandDockProps> = ({
   }
 
   return (
-    <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-40 w-[min(42rem,calc(100%-2rem))]">
+    // Sits above the canvas controls rather than on top of them: both are
+    // centred on the bottom edge, so at bottom-4 the expanded field covered
+    // the zoom, fit, select and hand buttons entirely.
+    <div className="absolute bottom-16 left-1/2 -translate-x-1/2 z-40 w-[min(42rem,calc(100%-2rem))]">
       <div className="bg-[#FFFEFB] border border-[#DED9CF] rounded-2xl shadow-xl p-2.5 space-y-2">
         {/* Context: what this command will act on. */}
         <div className="flex items-center gap-1.5 px-1 text-[10px] font-mono text-[#706C65] flex-wrap">

@@ -202,7 +202,15 @@ export const SelectionOverlay: React.FC<SelectionOverlayProps> = ({
             {availableActions.map((action) => (
               <button
                 key={action}
-                onClick={() => onChooseAction(action)}
+                onClick={(event) => {
+                  onChooseAction(action);
+                  // Release focus from the toolbar button. Arrow keys are
+                  // ignored while focus sits on a button — so menus and
+                  // toolbars keep their own keyboard behaviour — which would
+                  // otherwise make the arrows do nothing right after the user
+                  // arms "Położenie", the one action they are meant to drive.
+                  event.currentTarget.blur();
+                }}
                 title={ACTION_META[action].title}
                 className={`px-2 py-1 rounded flex items-center gap-1 transition-colors ${
                   activeAction === action ? 'bg-[#A86645]' : 'hover:bg-white/15'
