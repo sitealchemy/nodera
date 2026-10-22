@@ -38,6 +38,20 @@ import { PreviewView } from './components/Views/PreviewView';
 
 type Screen = 'intake' | 'directions' | 'editor' | 'preview';
 
+export type SaveState = 'saved' | 'dirty' | 'saving' | 'error';
+
+export interface EditorAppProps {
+  /** The document this editor session works on. */
+  initialProject: ProjectState;
+  /** Called on every committed document change, for autosave. */
+  onDocumentChange: (project: ProjectState) => void;
+  /** Explicit save. */
+  onSave: () => void;
+  saveState: SaveState;
+  saveError: string | null;
+  onBackToDashboard: () => void;
+}
+
 /** Text entry must keep its native keyboard behaviour. */
 function isTextEntryTarget(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
@@ -59,7 +73,14 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
   return !!el.closest('button, a, [role="button"], [role="menuitem"], summary');
 }
 
-export const App: React.FC = () => {
+export const App: React.FC<EditorAppProps> = ({
+  initialProject,
+  onDocumentChange,
+  onSave,
+  saveState,
+  saveError,
+  onBackToDashboard,
+}) => {
   const [screen, setScreen] = useState<Screen>('editor');
 
   // --- Document state (undoable) ------------------------------------------
@@ -69,7 +90,9 @@ export const App: React.FC = () => {
   const [doc, dispatch] = useReducer(
     documentReducer,
     undefined,
-    () => createDocumentState(StorageService.loadProject()),
+    // Keyed by project at the call site, so switching projects mounts a fresh
+    // editor: history, selection and camera never leak between documents.
+    () => createDocumentState(initialProject),
   );
   const project = doc.project;
 
@@ -91,10 +114,17 @@ export const App: React.FC = () => {
 
   const isModalOpen = isProposalOpen || isPublishChecklistOpen || isCodeExportOpen;
 
-  // Persist the document only. Camera, drawers and selection are session UI.
+  // The document now belongs to the project repository, so the editor reports
+  // changes upwards instead of writing storage itself.
+  //
+  // The guard compares identity with the document we were handed: the reducer
+  // only replaces `project` on a real edit. A one-shot "first render" flag
+  // does not survive StrictMode's mount/cleanup/mount cycle, and reported a
+  // phantom change that marked a freshly opened project as unsaved.
   useEffect(() => {
-    StorageService.saveProject(project);
-  }, [project]);
+    if (project === initialProject) return;
+    onDocumentChange(project);
+  }, [project, initialProject, onDocumentChange]);
 
   const activeDirection = project.directions[project.activeDirectionId];
   const pages = useMemo(() => Object.values(activeDirection.pages), [activeDirection]);
@@ -520,6 +550,10 @@ export const App: React.FC = () => {
         onOpenPublishChecklist={() => setIsPublishChecklistOpen(true)}
         onOpenCodeExport={() => setIsCodeExportOpen(true)}
         onOpenDirectionsView={() => setScreen('directions')}
+        onBackToDashboard={onBackToDashboard}
+        onSave={onSave}
+        saveState={saveState}
+        saveError={saveError}
       />
 
       <div className="flex-1 flex min-h-0 relative">

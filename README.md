@@ -1,39 +1,43 @@
 # Nodera — by Brainode
 
-A single-page design tool for building small marketing websites through a
-guided flow: client brief → three design directions → a precision visual
-editor → a shareable proposal → pre-publish checks → HTML/JSON export.
+A local design tool for building small marketing websites: describe a page,
+Manus generates it, and you edit the result in a precision visual editor —
+selection, optical nudging, responsive scopes, directions, snapshots and
+HTML/JSON export.
 
 The whole product UI is in **Polish**. The codebase (identifiers, comments) is
 mixed English/Polish.
 
-> **Status: front-end prototype.** Everything runs in the browser. There is no
-> backend, no database, no authentication, and no live LLM — see
-> [What is and is not real](#what-is-and-is-not-real) before judging the
-> feature list.
+> **Status: local single-user tool.** Projects live in the browser's IndexedDB.
+> Generation calls the real Manus API through a small local backend that keeps
+> the key server-side. There is no authentication, no cloud sync and no
+> publishing — see [What is and is not real](#what-is-and-is-not-real).
 
 ---
 
 ## Quick start
 
-**Prerequisites:** Node.js 18+ (developed against Node 24).
+**Prerequisites:** Node.js 18+ and [bun](https://bun.sh) (the repo's lockfile is `bun.lock`).
 
 ```bash
-npm install
-npm run dev
+bun install
+cp .env.example .env   # then paste your Manus API key into MANUS_API_KEY
+bun run dev
 ```
 
-Then open <http://localhost:3000>.
+Open <http://localhost:3000>. One command runs both halves: the Vite dev server
+serves the app, and a plugin (`server/manusPlugin.ts`) mounts the local backend
+at `/api/manus/*` in the same process.
 
-**No environment variables are required.** Nothing in `src/` reads
-`import.meta.env` or `process.env`, so there is no `.env.local` to create and
-no API key to obtain. The repo's `.env.example` (`VITE_N8N_INSTANCE_URL`,
-`VITE_N8N_API_KEY`) and the `MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API` entry in
-`metadata.json` are leftovers from the scaffold and are not used by any code
-currently in the repository.
+### The Manus API key
 
-A `bun.lock` is checked in, so `bun install && bun run dev` works too. `npm`
-resolves the same tree cleanly.
+`MANUS_API_KEY` is read only in Node, by `server/manusApi.ts`. It is deliberately
+**not** prefixed `VITE_`: anything named `VITE_*` is inlined into the browser
+bundle and shipped to every visitor.
+
+Without a key the app still opens and the demo project still works; the
+dashboard shows what to configure, and generation is refused with that message
+rather than failing obscurely.
 
 ### Scripts
 
@@ -42,7 +46,10 @@ resolves the same tree cleanly.
 | `npm run dev` | Vite dev server on `0.0.0.0:3000` |
 | `npm run build` | `tsc` typecheck, then production build to `dist/` |
 | `npm run preview` | Serve the built `dist/` on port 3000 |
-| `npm run lint` | `tsc --noEmit` — typecheck only, no ESLint in this repo |
+| `bun run lint` | `tsc --noEmit` over src, server, e2e and the configs |
+| `bun run test` | Unit tests (Vitest) |
+| `bun run test:e2e` | End-to-end tests (Playwright, Manus mocked) |
+| `bun run test:e2e:report` | Opens the last Playwright HTML report |
 
 ---
 

@@ -1,7 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  ArrowLeft,
   Check,
   ChevronDown,
+  CloudOff,
+  Loader2,
+  Save,
   Code,
   Compass,
   Eye,
@@ -44,6 +48,10 @@ export interface EditorHeaderProps {
   onOpenPublishChecklist: () => void;
   onOpenCodeExport: () => void;
   onOpenDirectionsView: () => void;
+  onBackToDashboard: () => void;
+  onSave: () => void;
+  saveState: 'saved' | 'dirty' | 'saving' | 'error';
+  saveError: string | null;
 }
 
 function useDismissable(onDismiss: () => void) {
@@ -91,6 +99,10 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
   onOpenPublishChecklist,
   onOpenCodeExport,
   onOpenDirectionsView,
+  onBackToDashboard,
+  onSave,
+  saveState,
+  saveError,
 }) => {
   const [pagesOpen, setPagesOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -107,6 +119,13 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
     <header className="h-12 shrink-0 bg-[#FFFEFB] border-b border-[#DED9CF] px-3 flex items-center justify-between gap-3 z-40 select-none">
       {/* Identity + page */}
       <div className="flex items-center gap-2 min-w-0">
+        <button
+          onClick={onBackToDashboard}
+          title="Wróć do projektów"
+          className="p-1.5 rounded-lg hover:bg-[#F6F4EF] text-[#706C65] hover:text-[#292824] transition-colors shrink-0"
+        >
+          <ArrowLeft className="w-4 h-4" />
+        </button>
         <div className="w-6 h-6 rounded-md bg-[#292824] flex items-center justify-center text-white font-serif font-bold text-[13px] shrink-0">
           N
         </div>
@@ -231,6 +250,38 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
 
       {/* Preview + more */}
       <div className="flex items-center gap-1.5">
+        <button
+          onClick={onSave}
+          disabled={saveState === 'saving'}
+          title={saveError ?? 'Zapisz projekt'}
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
+            saveState === 'error'
+              ? 'bg-rose-50 border-rose-200 text-rose-700'
+              : saveState === 'dirty'
+                ? 'bg-[#A86645] border-[#A86645] text-white hover:bg-[#935537]'
+                : 'bg-[#F6F4EF] border-[#DED9CF] text-[#706C65]'
+          }`}
+        >
+          {saveState === 'saving' ? (
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          ) : saveState === 'error' ? (
+            <CloudOff className="w-3.5 h-3.5" />
+          ) : saveState === 'dirty' ? (
+            <Save className="w-3.5 h-3.5" />
+          ) : (
+            <Check className="w-3.5 h-3.5" />
+          )}
+          <span className="hidden md:inline">
+            {saveState === 'saving'
+              ? 'Zapisuję…'
+              : saveState === 'error'
+                ? 'Błąd zapisu'
+                : saveState === 'dirty'
+                  ? 'Zapisz'
+                  : 'Zapisano'}
+          </span>
+        </button>
+
         <button
           onClick={onOpenPreview}
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#F6F4EF] hover:bg-[#EFECE3] border border-[#DED9CF] text-xs font-medium text-[#292824] transition-colors"

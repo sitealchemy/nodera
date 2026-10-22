@@ -10,17 +10,31 @@ import { Page, expect, Locator, FrameLocator } from '@playwright/test';
 
 export const STORAGE_KEY = 'nodera_project_state_v1';
 
-/** Opens the editor on the demo project with no saved state carried over. */
+/**
+ * Opens the editor on the demo project, from a clean store.
+ *
+ * The app now starts on the dashboard, so the editor is reached by choosing
+ * the demo explicitly — which is also the only way a user gets it.
+ */
 export async function openEditor(page: Page): Promise<void> {
+  // Guarded, and only before the app has ever opened the database. Init
+  // scripts run on every navigation, and a deleteDatabase that the app's own
+  // open connection blocks will in turn block every later open — which looks
+  // like IndexedDB silently hanging rather than failing.
   await page.addInitScript((key) => {
     try {
+      if (window.sessionStorage.getItem('e2e-cleared')) return;
+      window.sessionStorage.setItem('e2e-cleared', '1');
       window.localStorage.removeItem(key);
+      window.localStorage.removeItem('nodera_migrated_to_projects_v1');
+      indexedDB.deleteDatabase('nodera');
     } catch {
       /* private mode */
     }
   }, STORAGE_KEY);
 
   await page.goto('/');
+  await page.getByRole('button', { name: /projekt demonstracyjny/i }).click();
   await waitForDocumentRendered(page);
 }
 
@@ -125,9 +139,66 @@ export async function selectedNodeName(page: Page): Promise<string | null> {
   return (await label.textContent())?.trim() ?? null;
 }
 
-/** Reads the whole stored project. */
+/**
+ * Reads the document of the most recently updated project.
+ *
+ * Documents live in IndexedDB now, one record per project, so this replaces
+ * the old single localStorage key. Note that the editor autosaves on a short
+ * debounce: assert on this with `expect.poll` rather than reading once
+ * immediately after an edit.
+ */
 export async function readProject(page: Page): Promise<any> {
-  return page.evaluate((key) => JSON.parse(window.localStorage.getItem(key) ?? 'null'), STORAGE_KEY);
+  return page.evaluate(
+    () =>
+      new Promise<any>((resolve) => {
+        // Every exit path resolves, including the ones IndexedDB signals by
+        // throwing synchronously or by firing nothing at all; a promise that
+        // never settles turns a failed read into a 30s test timeout with no
+        // explanation.
+        const done = (value: any) => resolve(value ?? null);
+        const guard = setTimeout(() => done(null), 4000);
+        const finish = (value: any) => {
+          clearTimeout(guard);
+          done(value);
+        };
+
+        try {
+          const open = indexedDB.open('nodera');
+          open.onerror = () => finish(null);
+          open.onblocked = () => finish(null);
+          open.onsuccess = () => {
+            try {
+              const db = open.result;
+              const stores = db.objectStoreNames;
+              if (!stores.contains('summaries') || !stores.contains('documents')) {
+                finish(null);
+                return;
+              }
+              const tx = db.transaction(['summaries', 'documents'], 'readonly');
+              tx.onerror = () => finish(null);
+              tx.onabort = () => finish(null);
+
+              const summaries = tx.objectStore('summaries').getAll();
+              summaries.onerror = () => finish(null);
+              summaries.onsuccess = () => {
+                const newest = [...summaries.result].sort((a, b) => b.updatedAt - a.updatedAt)[0];
+                if (!newest) {
+                  finish(null);
+                  return;
+                }
+                const stored = tx.objectStore('documents').get(newest.id);
+                stored.onerror = () => finish(null);
+                stored.onsuccess = () => finish(stored.result?.document ?? null);
+              };
+            } catch {
+              finish(null);
+            }
+          };
+        } catch {
+          finish(null);
+        }
+      }),
+  );
 }
 
 /** Finds a node inside a stored project tree. */
