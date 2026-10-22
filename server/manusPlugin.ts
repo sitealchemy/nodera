@@ -1,7 +1,8 @@
-import type { Connect, Plugin } from 'vite';
+import { loadEnv, type Connect, type Plugin } from 'vite';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
   MISSING_KEY_MESSAGE,
+  configureEnv,
   createTask,
   listMessages,
   readApiKey,
@@ -176,6 +177,12 @@ export function manusApiPlugin(): Plugin {
 
   return {
     name: 'nodera-manus-api',
+    config(_config, { mode }) {
+      // An empty prefix loads every variable, not just VITE_ ones. The values
+      // stay in this Node process: nothing here goes into `define`, so none of
+      // it can reach the browser bundle.
+      configureEnv(loadEnv(mode, process.cwd(), ''));
+    },
     configureServer(server) {
       server.middlewares.use(handler);
     },

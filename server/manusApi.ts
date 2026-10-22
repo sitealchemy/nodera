@@ -9,7 +9,30 @@
  * task.sendMessage), verified against the published reference on 2026-10-22.
  */
 
-const MANUS_BASE_URL = process.env.MANUS_BASE_URL ?? 'https://api.manus.ai';
+/**
+ * Environment supplied by the Vite plugin.
+ *
+ * Vite reads .env files, but it only exposes VITE_-prefixed values, and only
+ * to client code through import.meta.env. It does NOT populate process.env, so
+ * a server-side module reading process.env.MANUS_API_KEY sees nothing however
+ * correct the .env file is. The plugin loads the file explicitly and injects
+ * the result here.
+ */
+let injectedEnv: Record<string, string | undefined> = {};
+
+export function configureEnv(env: Record<string, string | undefined>): void {
+  injectedEnv = env ?? {};
+}
+
+/** Injected .env first, then a variable exported in the shell. */
+function readEnv(name: string): string | undefined {
+  const value = injectedEnv[name] ?? process.env[name];
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function baseUrl(): string {
+  return readEnv('MANUS_BASE_URL') ?? 'https://api.manus.ai';
+}
 
 export interface ManusConfigError {
   kind: 'config';
@@ -26,8 +49,7 @@ export interface ManusRequestError {
 export type ManusFailure = ManusConfigError | ManusRequestError;
 
 export function readApiKey(): string | null {
-  const key = process.env.MANUS_API_KEY?.trim();
-  return key ? key : null;
+  return readEnv('MANUS_API_KEY') ?? null;
 }
 
 export const MISSING_KEY_MESSAGE =
@@ -43,7 +65,7 @@ async function callManus(
     return { ok: false, error: { kind: 'config', message: MISSING_KEY_MESSAGE } };
   }
 
-  const url = new URL(path, MANUS_BASE_URL);
+  const url = new URL(path, baseUrl());
   Object.entries(init.query ?? {}).forEach(([key, value]) => url.searchParams.set(key, value));
 
   let response: Response;

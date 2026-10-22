@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { summariseMessages } from './manusApi';
+import { configureEnv, readApiKey, summariseMessages } from './manusApi';
 
 /** Builds a message in the shape task.listMessages returns. */
 const message = (type: string, payload: Record<string, unknown>, timestamp: number) => ({
@@ -100,5 +100,60 @@ describe('summariseMessages', () => {
       message('status_update', { status_update: { agent_status: 'stopped' } }, 3),
     ]);
     expect(snapshot.phase).toBe('stopped');
+  });
+});
+
+describe('environment loading', () => {
+  // The regression: Vite reads .env but does not populate process.env, and
+  // exposes only VITE_-prefixed values to client code. A server module reading
+  // process.env.MANUS_API_KEY therefore saw nothing however correct the .env
+  // file was. The plugin now loads the file and injects it here.
+  it('reads a key injected from the .env file', () => {
+    configureEnv({ MANUS_API_KEY: 'from-dotenv' });
+    expect(readApiKey()).toBe('from-dotenv');
+  });
+
+  it('falls back to a variable exported in the shell', () => {
+    configureEnv({});
+    const previous = process.env.MANUS_API_KEY;
+    process.env.MANUS_API_KEY = 'from-shell';
+    try {
+      expect(readApiKey()).toBe('from-shell');
+    } finally {
+      if (previous === undefined) delete process.env.MANUS_API_KEY;
+      else process.env.MANUS_API_KEY = previous;
+    }
+  });
+
+  it('prefers the .env value over the shell one', () => {
+    const previous = process.env.MANUS_API_KEY;
+    process.env.MANUS_API_KEY = 'from-shell';
+    configureEnv({ MANUS_API_KEY: 'from-dotenv' });
+    try {
+      expect(readApiKey()).toBe('from-dotenv');
+    } finally {
+      if (previous === undefined) delete process.env.MANUS_API_KEY;
+      else process.env.MANUS_API_KEY = previous;
+    }
+  });
+
+  it('trims surrounding whitespace', () => {
+    configureEnv({ MANUS_API_KEY: '  spaced-key  ' });
+    expect(readApiKey()).toBe('spaced-key');
+  });
+
+  it('treats an empty or whitespace-only value as no key at all', () => {
+    const previous = process.env.MANUS_API_KEY;
+    delete process.env.MANUS_API_KEY;
+    try {
+      configureEnv({ MANUS_API_KEY: '' });
+      expect(readApiKey()).toBeNull();
+      configureEnv({ MANUS_API_KEY: '   ' });
+      expect(readApiKey()).toBeNull();
+      configureEnv({});
+      expect(readApiKey()).toBeNull();
+    } finally {
+      if (previous !== undefined) process.env.MANUS_API_KEY = previous;
+    }
   });
 });
