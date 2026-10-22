@@ -1,0 +1,185 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "siteName",
+    "tokens",
+    "slug",
+    "name",
+    "title",
+    "description",
+    "sections"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "description": "Always 1."
+    },
+    "siteName": {
+      "type": "string",
+      "description": "Short name of the site or business."
+    },
+    "slug": {
+      "type": "string",
+      "description": "URL slug, lowercase, no spaces, e.g. \"start\"."
+    },
+    "name": {
+      "type": "string",
+      "description": "Human name shown in the editor, e.g. \"Strona główna\"."
+    },
+    "title": {
+      "type": "string",
+      "description": "HTML <title>."
+    },
+    "description": {
+      "type": "string",
+      "description": "Meta description, one sentence."
+    },
+    "tokens": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "accent",
+        "surface",
+        "text",
+        "muted",
+        "headingFont",
+        "radius"
+      ],
+      "properties": {
+        "accent": {
+          "type": "string",
+          "description": "Accent colour as #rrggbb, used for buttons and highlights."
+        },
+        "surface": {
+          "type": "string",
+          "description": "Page background as #rrggbb."
+        },
+        "text": {
+          "type": "string",
+          "description": "Body text colour as #rrggbb."
+        },
+        "muted": {
+          "type": "string",
+          "description": "Secondary text colour as #rrggbb."
+        },
+        "headingFont": {
+          "type": "string",
+          "enum": [
+            "serif",
+            "sans"
+          ],
+          "description": "Heading typeface family."
+        },
+        "radius": {
+          "type": "string",
+          "description": "Button corner radius as a CSS length, e.g. \"8px\"."
+        }
+      }
+    },
+    "sections": {
+      "type": "array",
+      "description": "Four to seven sections, starting with nav and ending with footer.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "heading",
+          "subheading",
+          "body",
+          "imageSrc",
+          "imageAlt",
+          "items",
+          "actions"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "nav",
+              "hero",
+              "features",
+              "text",
+              "gallery",
+              "cta",
+              "contact",
+              "footer"
+            ],
+            "description": "Section layout. Use nav once at the top and footer once at the bottom."
+          },
+          "heading": {
+            "type": "string",
+            "description": "Section heading. Empty string when not needed."
+          },
+          "subheading": {
+            "type": "string",
+            "description": "Short line above or below the heading, may be empty."
+          },
+          "body": {
+            "type": "string",
+            "description": "Paragraph text, may be empty."
+          },
+          "imageSrc": {
+            "type": "string",
+            "description": "Absolute https image URL, or empty string. Do not invent URLs that may not exist."
+          },
+          "imageAlt": {
+            "type": "string",
+            "description": "Alt text describing the image, may be empty."
+          },
+          "items": {
+            "type": "array",
+            "description": "Cards, features or list entries. Empty array when not needed.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "title",
+                "body",
+                "meta"
+              ],
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "description": "Item title."
+                },
+                "body": {
+                  "type": "string",
+                  "description": "Item description."
+                },
+                "meta": {
+                  "type": "string",
+                  "description": "Short supporting line such as a price, may be empty."
+                }
+              }
+            }
+          },
+          "actions": {
+            "type": "array",
+            "description": "Buttons or links. Empty array when not needed.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "label",
+                "href"
+              ],
+              "properties": {
+                "label": {
+                  "type": "string",
+                  "description": "Button text."
+                },
+                "href": {
+                  "type": "string",
+                  "description": "Internal slug, \"#anchor\", or an https/mailto/tel URL."
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

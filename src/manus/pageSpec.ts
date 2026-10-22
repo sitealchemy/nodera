@@ -97,13 +97,33 @@ const stringField = (description: string) => ({ type: 'string', description });
  * as the API demands. Fields that may legitimately be absent are declared as
  * strings that can be empty rather than as optional properties.
  */
+/**
+ * The wire schema sent as `structured_output_schema`.
+ *
+ * Flat on purpose: the API rejects schemas nested deeper than five levels of
+ * objects and arrays. A `pages` array would have cost two of those levels
+ * (`pages` -> page object) and pushed the item and action arrays to depth 6
+ * and 7, which is what a 400 `invalid_argument` was telling us.
+ *
+ * One prompt produces one page at this stage, so the page's own fields sit at
+ * the root. Depth here is exactly five:
+ *   root(1) -> sections(2) -> section(3) -> items(4) -> item(5).
+ *
+ * Every property is listed in `required` with `additionalProperties: false`,
+ * as the API demands; fields that may be absent are empty strings or arrays
+ * rather than optional properties.
+ */
 export const MANUS_OUTPUT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['schemaVersion', 'siteName', 'tokens', 'pages'],
+  required: ['schemaVersion', 'siteName', 'tokens', 'slug', 'name', 'title', 'description', 'sections'],
   properties: {
     schemaVersion: { type: 'integer', description: 'Always 1.' },
     siteName: stringField('Short name of the site or business.'),
+    slug: stringField('URL slug, lowercase, no spaces, e.g. "start".'),
+    name: stringField('Human name shown in the editor, e.g. "Strona główna".'),
+    title: stringField('HTML <title>.'),
+    description: stringField('Meta description, one sentence.'),
     tokens: {
       type: 'object',
       additionalProperties: false,
@@ -121,74 +141,52 @@ export const MANUS_OUTPUT_SCHEMA = {
         radius: stringField('Button corner radius as a CSS length, e.g. "8px".'),
       },
     },
-    pages: {
+    sections: {
       type: 'array',
-      description: 'Exactly one page for now.',
+      description: 'Four to seven sections, starting with nav and ending with footer.',
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['slug', 'name', 'title', 'description', 'sections'],
+        required: ['kind', 'heading', 'subheading', 'body', 'imageSrc', 'imageAlt', 'items', 'actions'],
         properties: {
-          slug: stringField('URL slug, lowercase, no spaces, e.g. "start".'),
-          name: stringField('Human name shown in the editor, e.g. "Strona główna".'),
-          title: stringField('HTML <title>.'),
-          description: stringField('Meta description, one sentence.'),
-          sections: {
+          kind: {
+            type: 'string',
+            enum: [...SECTION_KINDS],
+            description: 'Section layout. Use nav once at the top and footer once at the bottom.',
+          },
+          heading: stringField('Section heading. Empty string when not needed.'),
+          subheading: stringField('Short line above or below the heading, may be empty.'),
+          body: stringField('Paragraph text, may be empty.'),
+          // Flattened out of an `image` object: nesting it here would add a
+          // level the API does not allow at this position.
+          imageSrc: stringField(
+            'Absolute https image URL, or empty string. Do not invent URLs that may not exist.',
+          ),
+          imageAlt: stringField('Alt text describing the image, may be empty.'),
+          items: {
             type: 'array',
+            description: 'Cards, features or list entries. Empty array when not needed.',
             items: {
               type: 'object',
               additionalProperties: false,
-              required: ['kind', 'heading', 'subheading', 'body', 'items', 'actions', 'image'],
+              required: ['title', 'body', 'meta'],
               properties: {
-                kind: {
-                  type: 'string',
-                  enum: [...SECTION_KINDS],
-                  description:
-                    'Section layout. Use nav once at the top and footer once at the bottom.',
-                },
-                heading: stringField('Section heading. Empty string when not needed.'),
-                subheading: stringField('Short line above or below the heading, may be empty.'),
-                body: stringField('Paragraph text, may be empty.'),
-                items: {
-                  type: 'array',
-                  description: 'Cards, features or list entries. Empty array when not needed.',
-                  items: {
-                    type: 'object',
-                    additionalProperties: false,
-                    required: ['title', 'body', 'meta'],
-                    properties: {
-                      title: stringField('Item title.'),
-                      body: stringField('Item description.'),
-                      meta: stringField('Short supporting line such as a price, may be empty.'),
-                    },
-                  },
-                },
-                actions: {
-                  type: 'array',
-                  description: 'Buttons or links. Empty array when not needed.',
-                  items: {
-                    type: 'object',
-                    additionalProperties: false,
-                    required: ['label', 'href'],
-                    properties: {
-                      label: stringField('Button text.'),
-                      href: stringField(
-                        'Internal slug, "#anchor", or an https/mailto/tel URL.',
-                      ),
-                    },
-                  },
-                },
-                image: {
-                  type: 'object',
-                  additionalProperties: false,
-                  required: ['src', 'alt'],
-                  properties: {
-                    src: stringField(
-                      'Absolute https image URL, or empty string for no image. Do not invent URLs that may not exist.',
-                    ),
-                    alt: stringField('Alt text describing the image.'),
-                  },
-                },
+                title: stringField('Item title.'),
+                body: stringField('Item description.'),
+                meta: stringField('Short supporting line such as a price, may be empty.'),
+              },
+            },
+          },
+          actions: {
+            type: 'array',
+            description: 'Buttons or links. Empty array when not needed.',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['label', 'href'],
+              properties: {
+                label: stringField('Button text.'),
+                href: stringField('Internal slug, "#anchor", or an https/mailto/tel URL.'),
               },
             },
           },
@@ -197,6 +195,26 @@ export const MANUS_OUTPUT_SCHEMA = {
     },
   },
 } as const;
+
+/**
+ * Maximum nesting the API accepts for objects and arrays.
+ * Exceeding it is rejected with 400 invalid_argument.
+ */
+export const MAX_SCHEMA_DEPTH = 5;
+
+/** Depth of a JSON Schema, counting object and array levels. */
+export function schemaDepth(node: unknown): number {
+  if (!node || typeof node !== 'object') return 0;
+  const schema = node as Record<string, any>;
+  if (schema.type === 'object') {
+    const children = Object.values(schema.properties ?? {});
+    return 1 + Math.max(0, ...children.map(schemaDepth));
+  }
+  if (schema.type === 'array') {
+    return 1 + schemaDepth(schema.items);
+  }
+  return 0;
+}
 
 /* ------------------------------------------------------------------ */
 /* Runtime validation                                                  */
@@ -262,7 +280,23 @@ export function validatePageSpec(input: unknown): SpecValidation {
     }
   }
 
-  const rawPages = Array.isArray(raw.pages) ? raw.pages : [];
+  // The wire form is a single flat page (the API caps schema nesting at five
+  // levels, so a `pages` array does not fit). An explicit `pages` array is
+  // still accepted, which keeps older fixtures and any future multi-page
+  // result working through the same validator.
+  const rawPages = Array.isArray(raw.pages)
+    ? raw.pages
+    : Array.isArray(raw.sections)
+      ? [
+          {
+            slug: raw.slug,
+            name: raw.name,
+            title: raw.title,
+            description: raw.description,
+            sections: raw.sections,
+          },
+        ]
+      : [];
   if (rawPages.length === 0) {
     errors.push({ path: 'pages', message: 'Wynik nie zawiera żadnej podstrony.' });
   }
@@ -360,7 +394,9 @@ export function validatePageSpec(input: unknown): SpecValidation {
         .filter((action) => action.label !== '');
 
       const rawImage = (section.image ?? {}) as Record<string, unknown>;
-      const src = asString(rawImage.src).trim();
+      // Flat `imageSrc`/`imageAlt` is the wire form; a nested `image` object
+      // is still read, so both shapes validate identically.
+      const src = (asString(section.imageSrc) || asString(rawImage.src)).trim();
       // Only https images are kept. http and data: URLs are dropped rather
       // than embedded in a document the user will export and share.
       const safeSrc = /^https:\/\/\S+$/i.test(src) ? src : '';
@@ -378,7 +414,10 @@ export function validatePageSpec(input: unknown): SpecValidation {
         body: clampText(asString(section.body)),
         items,
         actions,
-        image: { src: safeSrc, alt: clampText(asString(rawImage.alt)) },
+        image: {
+          src: safeSrc,
+          alt: clampText(asString(section.imageAlt) || asString(rawImage.alt)),
+        },
       });
     });
 

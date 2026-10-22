@@ -66,8 +66,19 @@ async function readJsonBody(req: IncomingMessage): Promise<any> {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 
-/** Maps a Manus failure onto an HTTP response without leaking the key. */
-function failureResponse(res: ServerResponse, error: { kind: string; message: string; status?: number }) {
+/**
+ * Maps a Manus failure onto an HTTP response without leaking the key.
+ *
+ * Also logs it. The first schema rejection left no trace anywhere on the
+ * server, which turned a one-line diagnosis into a hunt; the code and message
+ * come from the API and never contain credentials.
+ */
+function failureResponse(res: ServerResponse, error: { kind: string; message: string; status?: number; code?: string }) {
+  if (error.kind !== 'config') {
+    console.warn(
+      `[manus] ${error.status ?? '—'} ${error.code ?? 'error'}: ${error.message}`,
+    );
+  }
   if (error.kind === 'config') {
     sendJson(res, 503, { ok: false, code: 'missing_api_key', message: error.message });
     return;

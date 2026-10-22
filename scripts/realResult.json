@@ -1,0 +1,63 @@
+{
+  "description": "Checkpoint potwierdzający ukończenie zadania: kompletna statyczna strona piekarni Piekarnia Kromka gotowa w repozytorium, wraz z zasobami i konfiguracją.",
+  "name": "Piekarnia Kromka - checkpoint",
+  "schemaVersion": 1,
+  "sections": [
+    {
+      "actions": [],
+      "body": "",
+      "heading": "Działanie zakończone",
+      "imageAlt": "",
+      "imageSrc": "",
+      "items": [],
+      "kind": "footer",
+      "subheading": ""
+    },
+    {
+      "actions": [],
+      "body": "• Checkpoint projektu: 633e78a\n• Zmiany zatwierdzone: 7 plików, 533 insertions\n• Wydrukowane zasoby: index.html, styles.css, app.js, manus-routes.json, kromka-mark.svg, bakery-hero (w storage), app.config.ts\n• Strona responsywna z sekcjami: oferta, o nas, wizyta, newsletter, stopka\n• Metadane i branding: logo URL w app.config.ts, podgląd strony uruchomiony na porcie 3000\n",
+      "heading": "Podsumowanie techniczne",
+      "imageAlt": "",
+      "imageSrc": "",
+      "items": [],
+      "kind": "text",
+      "subheading": ""
+    },
+    {
+      "actions": [
+        {
+          "href": "#start",
+          "label": "Zobacz podgląd w Manus Preview"
+        }
+      ],
+      "body": "Podgląd statyczny uruchomiony w kontenerze dev (port 3000). Nie publikuję adresu podglądu w czacie; użyj panelu Manus do uzyskania dostępu do Preview.",
+      "heading": "Dostęp i publikacja",
+      "imageAlt": "",
+      "imageSrc": "",
+      "items": [],
+      "kind": "cta",
+      "subheading": ""
+    },
+    {
+      "actions": [],
+      "body": "",
+      "heading": "Wynik",
+      "imageAlt": "",
+      "imageSrc": "",
+      "items": [],
+      "kind": "footer",
+      "subheading": ""
+    }
+  ],
+  "siteName": "Piekarnia Kromka",
+  "slug": "pieczar-kromka",
+  "title": "Piekarnia Kromka – codziennie od świtu",
+  "tokens": {
+    "accent": "#c95e3a",
+    "headingFont": "sans",
+    "muted": "#7b8b81",
+    "radius": "8px",
+    "surface": "#f5f0e7",
+    "text": "#173b2c"
+  }
+}
