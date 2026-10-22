@@ -36,6 +36,7 @@ const STATUS_LABEL: Record<GenerationStatus, string> = {
   none: 'Szkic',
   starting: 'Uruchamianie',
   generating: 'Generowanie',
+  downloading: 'Pobieranie plików',
   importing: 'Przygotowanie',
   waiting: 'Czeka na odpowiedź',
   ready: 'Gotowy',
@@ -46,13 +47,14 @@ const STATUS_TONE: Record<GenerationStatus, string> = {
   none: 'bg-[#F6F4EF] text-[#706C65] border-[#DED9CF]',
   starting: 'bg-[#A86645]/10 text-[#A86645] border-[#A86645]/30',
   generating: 'bg-[#A86645]/10 text-[#A86645] border-[#A86645]/30',
+  downloading: 'bg-[#A86645]/10 text-[#A86645] border-[#A86645]/30',
   importing: 'bg-[#A86645]/10 text-[#A86645] border-[#A86645]/30',
   waiting: 'bg-amber-50 text-amber-800 border-amber-200',
   ready: 'bg-emerald-50 text-emerald-700 border-emerald-200',
   error: 'bg-rose-50 text-rose-700 border-rose-200',
 };
 
-const IN_PROGRESS: GenerationStatus[] = ['starting', 'generating', 'importing'];
+const IN_PROGRESS: GenerationStatus[] = ['starting', 'generating', 'downloading', 'importing'];
 
 function formatDate(timestamp: number): string {
   return new Date(timestamp).toLocaleString('pl-PL', {

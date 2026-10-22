@@ -1,4 +1,4 @@
-import { ProjectState } from '../types/document';
+
 
 /**
  * Undo/redo as a single pure reducer.
@@ -13,17 +13,17 @@ import { ProjectState } from '../types/document';
 
 export const HISTORY_LIMIT = 25;
 
-export interface DocumentState {
-  project: ProjectState;
-  past: ProjectState[];
-  future: ProjectState[];
+export interface DocumentState<T = unknown> {
+  project: T;
+  past: T[];
+  future: T[];
 }
 
-export type DocumentAction =
+export type DocumentAction<T = unknown> =
   /** An edit that should be undoable. */
-  | { type: 'commit'; next: ProjectState }
+  | { type: 'commit'; next: T }
   /** Replace the document without touching history (loading a project). */
-  | { type: 'reset'; next: ProjectState }
+  | { type: 'reset'; next: T }
   /**
    * Change which page or direction is being looked at.
    *
@@ -31,17 +31,29 @@ export type DocumentAction =
    * history would make undo walk back through every page the user visited
    * before reaching the change they actually wanted to revert.
    */
-  | { type: 'navigate'; next: ProjectState }
+  | { type: 'navigate'; next: T }
   | { type: 'undo' }
   | { type: 'redo' };
 
-const clone = (state: ProjectState): ProjectState => JSON.parse(JSON.stringify(state));
+/**
+ * Snapshot for the history stacks.
+ *
+ * `structuredClone` rather than JSON: a site document holds Blobs for its
+ * assets, and JSON round-tripping would silently turn each one into `{}`.
+ */
+const clone = <T,>(state: T): T => {
+  try {
+    return structuredClone(state);
+  } catch {
+    return JSON.parse(JSON.stringify(state));
+  }
+};
 
-export function createDocumentState(project: ProjectState): DocumentState {
+export function createDocumentState<T>(project: T): DocumentState<T> {
   return { project, past: [], future: [] };
 }
 
-export function documentReducer(state: DocumentState, action: DocumentAction): DocumentState {
+export function documentReducer<T>(state: DocumentState<T>, action: DocumentAction<T>): DocumentState<T> {
   switch (action.type) {
     case 'commit': {
       // A commit that changes nothing must not create a history entry: an undo

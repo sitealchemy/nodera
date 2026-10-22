@@ -1,0 +1,92 @@
+[
+  {
+    "type": "file",
+    "filename": "miedzy-drzewami.zip",
+    "content_type": "application/zip",
+    "path": "/home/ubuntu/miedzy-drzewami.zip",
+    "file_uid": "0d81ee3e-7e15-469b-8f8c-681e14952ca2",
+    "downloaded": true,
+    "bytes": 8714500
+  },
+  {
+    "type": "file",
+    "filename": "index.html",
+    "content_type": "text/html; charset=utf-8",
+    "path": "/home/ubuntu/miedzy-drzewami/index.html",
+    "file_uid": "85792f56-f6c6-40b3-9545-ce4a2905594c",
+    "downloaded": true,
+    "bytes": 8945
+  },
+  {
+    "type": "file",
+    "filename": "style.css",
+    "content_type": "text/css; charset=utf-8",
+    "path": "/home/ubuntu/miedzy-drzewami/style.css",
+    "file_uid": "3a06f217-6542-4175-ac94-b17207e95ba8",
+    "downloaded": true,
+    "bytes": 17287
+  },
+  {
+    "type": "file",
+    "filename": "README.md",
+    "content_type": "text/markdown; charset=utf-8",
+    "path": "/home/ubuntu/miedzy-drzewami/README.md",
+    "file_uid": "f559a61b-bf28-4df1-a0e1-2ee3b3b1da93",
+    "downloaded": true,
+    "bytes": 1090
+  },
+  {
+    "type": "file",
+    "filename": "zrodla-zdjec.md",
+    "content_type": "text/markdown; charset=utf-8",
+    "path": "/home/ubuntu/miedzy-drzewami/docs/zrodla-zdjec.md",
+    "file_uid": "d921903b-3657-40f3-bcbf-7b1ae95b4e90",
+    "downloaded": true,
+    "bytes": 1488
+  },
+  {
+    "type": "image",
+    "filename": "hero-domek-w-lesie.jpg",
+    "content_type": "image/jpeg",
+    "path": "/home/ubuntu/miedzy-drzewami/assets/images/hero-domek-w-lesie.jpg",
+    "file_uid": "e97eee7d-6dcf-4c4c-a16a-fa814e38fe11",
+    "downloaded": true,
+    "bytes": 3233822
+  },
+  {
+    "type": "image",
+    "filename": "domek-w-lesie.jpg",
+    "content_type": "image/jpeg",
+    "path": "/home/ubuntu/miedzy-drzewami/assets/images/domek-w-lesie.jpg",
+    "file_uid": "dae41c03-018e-4148-8471-8ddbea894aca",
+    "downloaded": true,
+    "bytes": 1686194
+  },
+  {
+    "type": "image",
+    "filename": "wnetrze-z-kominkiem.jpg",
+    "content_type": "image/jpeg",
+    "path": "/home/ubuntu/miedzy-drzewami/assets/images/wnetrze-z-kominkiem.jpg",
+    "file_uid": "72b4f186-b620-4d50-a417-5351df9b077a",
+    "downloaded": true,
+    "bytes": 1254291
+  },
+  {
+    "type": "image",
+    "filename": "sypialnia-w-zieleni.jpg",
+    "content_type": "image/jpeg",
+    "path": "/home/ubuntu/miedzy-drzewami/assets/images/sypialnia-w-zieleni.jpg",
+    "file_uid": "e10ee3b7-5fa0-4b10-8851-95a5327ea5c8",
+    "downloaded": true,
+    "bytes": 664774
+  },
+  {
+    "type": "image",
+    "filename": "dolny-slask-krajobraz.jpg",
+    "content_type": "image/jpeg",
+    "path": "/home/ubuntu/miedzy-drzewami/assets/images/dolny-slask-krajobraz.jpg",
+    "file_uid": "c91dbdec-69fe-452b-8fb4-9cbee40270f0",
+    "downloaded": true,
+    "bytes": 1893055
+  }
+]

@@ -15,6 +15,8 @@ import { INITIAL_SPLOT_PROJECT } from './data/splotDemo';
 import { Camera, IDENTITY_CAMERA } from './lib/camera';
 import { ElementAction, findNode, navigateFrom, nodeExists } from './lib/documentTree';
 import {
+  DocumentAction,
+  DocumentState,
   canRedo as canRedoOf,
   canUndo as canUndoOf,
   createDocumentState,
@@ -88,11 +90,17 @@ export const App: React.FC<EditorAppProps> = ({
   // atomic. Nested setState updaters with side effects double-fired under
   // StrictMode and pushed two history entries per edit.
   const [doc, dispatch] = useReducer(
-    documentReducer,
-    undefined,
-    // Keyed by project at the call site, so switching projects mounts a fresh
-    // editor: history, selection and camera never leak between documents.
-    () => createDocumentState(initialProject),
+    // Wrapped rather than passed by reference: the reducer is generic now
+    // (a site document shares the same history machinery), and a bare
+    // generic function does not bind its type parameter through useReducer's
+    // lazy-initialiser overload.
+    (state: DocumentState<ProjectState>, action: DocumentAction<ProjectState>) =>
+      documentReducer(state, action),
+    // Only the first value is used. Computing it inline keeps the generic
+    // parameter inferrable, which the lazy-initialiser overload does not.
+    // The component is keyed by project at the call site, so switching
+    // projects mounts a fresh editor and no history leaks between documents.
+    createDocumentState(initialProject),
   );
   const project = doc.project;
 

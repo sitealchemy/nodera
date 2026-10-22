@@ -13,7 +13,7 @@ import {
 const project = (name: string): ProjectState =>
   ({ id: 'p', name, directions: {}, activeDirectionId: 'd' } as unknown as ProjectState);
 
-const commit = (state: DocumentState, next: ProjectState) =>
+const commit = (state: DocumentState<ProjectState>, next: ProjectState) =>
   documentReducer(state, { type: 'commit', next });
 
 describe('documentReducer', () => {

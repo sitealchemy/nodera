@@ -4,6 +4,8 @@ import {
   MISSING_KEY_MESSAGE,
   configureEnv,
   createTask,
+  fetchTaskFile,
+  listTaskFiles,
   listMessages,
   readApiKey,
   sendMessage,
@@ -19,31 +21,35 @@ import {
  * on the server side of the boundary.
  */
 
-const PROMPT_PREAMBLE = `Jesteś generatorem stron dla edytora Nodera.
+const PROMPT_PREAMBLE = `Zaprojektuj i zbuduj KOMPLETNĄ, dopracowaną stronę internetową.
 
-Zaprojektuj JEDNĄ kompletną, responsywną stronę na podstawie opisu użytkownika
-i zwróć ją WYŁĄCZNIE jako obiekt zgodny z podanym schematem JSON.
+Masz pełną swobodę projektową: kompozycja, siatka, typografia, kolory,
+odstępy i liczba sekcji należą do Ciebie. Nie ograniczam Cię do żadnego
+szablonu ani zestawu gotowych bloków.
 
-Zasady treści:
-- pisz po polsku, zwięźle i konkretnie;
-- treść ma wynikać z opisu użytkownika;
-- NIE wymyślaj referencji, opinii klientów, certyfikatów, nagród,
-  nazwisk, numerów telefonów ani adresów, których użytkownik nie podał;
-- jeżeli dane kontaktowe nie zostały podane, użyj neutralnego wezwania
-  do kontaktu bez konkretnych danych;
-- nie podawaj adresów obrazów, których istnienia nie jesteś pewien —
-  w takim wypadku zostaw pole image.src puste.
+Wymagania techniczne:
+- jedna kompletna strona, w pełni responsywna (desktop, tablet, telefon);
+- statyczny HTML + CSS, bez frameworka i bez kroku budowania;
+- jeśli używasz Tailwinda, dołącz skompilowany arkusz CSS, nie CDN;
+- semantyczny HTML i sensowna dostępność.
 
-Zasady struktury:
-- zacznij od sekcji "nav", zakończ sekcją "footer";
-- użyj od 4 do 7 sekcji łącznie;
-- dokładnie jedna sekcja "hero" z nagłówkiem h1;
-- w sekcjach "features" podaj od 2 do 4 pozycji w items;
-- actions to przyciski: label plus href (slug strony, "#kotwica",
-  albo pełny adres https/mailto/tel);
-- kolory podaj jako #rrggbb i zadbaj o czytelny kontrast tekstu do tła.
+Zdjęcia są częścią projektu:
+- znajdź lub wygeneruj obrazy pasujące do briefu i DOŁĄCZ pliki do odpowiedzi;
+- jeśli to zdjęcia poglądowe, napisz to wprost — nie podawaj ich jako
+  autentycznych zdjęć obiektu klienta;
+- nie wstawiaj adresów obrazów, co do których nie masz pewności.
 
-Opis użytkownika:`;
+Treść:
+- pisz po polsku, konkretnie i w tonie pasującym do briefu;
+- NIE wymyślaj opinii gości, nagród, certyfikatów, nazwisk, numerów telefonu
+  ani adresów, których nie podano w briefie.
+
+SPOSÓB DOSTARCZENIA — to jest krytyczne:
+Dołącz do odpowiedzi RZECZYWISTE PLIKI projektu jako załączniki: index.html,
+arkusz(e) stylów i wszystkie pliki obrazów, z zachowaniem struktury katalogów.
+Nie odsyłaj wyłącznie do podglądu online — potrzebny jest kod źródłowy.
+
+Brief użytkownika:`;
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body);
@@ -115,14 +121,12 @@ export function manusApiPlugin(): Plugin {
           sendJson(res, 400, { ok: false, code: 'invalid_argument', message: 'Pusty opis.' });
           return;
         }
-        if (!body.schema || typeof body.schema !== 'object') {
-          sendJson(res, 400, { ok: false, code: 'invalid_argument', message: 'Brak schematu wyniku.' });
-          return;
-        }
-
+        // No structured_output_schema on purpose. Asking Manus for a JSON
+        // page description was what took composition, typography and imagery
+        // out of its hands; the deliverable is now the project's own files,
+        // which arrive as attachments on the task's messages.
         const result = await createTask({
           message: { content: [{ type: 'text', text: `${PROMPT_PREAMBLE}\n\n${prompt}` }] },
-          structured_output_schema: body.schema,
           locale: 'pl',
           agent_profile: 'standard',
           hide_in_task_list: false,
@@ -155,6 +159,52 @@ export function manusApiPlugin(): Plugin {
           return;
         }
         sendJson(res, 200, { ok: true, ...summariseMessages(result.data.messages ?? []) });
+        return;
+      }
+
+      /* --- list the files a task produced ------------------------------- */
+      if (url.startsWith('/api/manus/files') && req.method === 'GET') {
+        const taskId = new URL(url, 'http://local').searchParams.get('taskId');
+        if (!taskId) {
+          sendJson(res, 400, { ok: false, code: 'invalid_argument', message: 'Brak taskId.' });
+          return;
+        }
+        const result = await listTaskFiles(taskId);
+        if (!result.ok) {
+          failureResponse(res, result.error);
+          return;
+        }
+        // The temporary download URLs stay on the server: the browser asks
+        // this backend for each file instead of holding signed links.
+        sendJson(res, 200, {
+          ok: true,
+          files: result.files.map(({ path, filename, contentType }) => ({
+            path,
+            filename,
+            contentType,
+          })),
+        });
+        return;
+      }
+
+      /* --- stream one task file ----------------------------------------- */
+      if (url.startsWith('/api/manus/file') && req.method === 'GET') {
+        const params = new URL(url, 'http://local').searchParams;
+        const taskId = params.get('taskId');
+        const path = params.get('path');
+        if (!taskId || !path) {
+          sendJson(res, 400, { ok: false, code: 'invalid_argument', message: 'Brak taskId lub path.' });
+          return;
+        }
+        const result = await fetchTaskFile(taskId, path);
+        if (!result.ok) {
+          failureResponse(res, result.error);
+          return;
+        }
+        res.statusCode = 200;
+        res.setHeader('content-type', result.contentType);
+        res.setHeader('cache-control', 'no-store');
+        res.end(Buffer.from(result.body));
         return;
       }
 

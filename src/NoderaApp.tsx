@@ -6,12 +6,15 @@ import { fetchConfig } from './manus/client';
 import { projectRepository } from './projects/indexedDbRepository';
 import { useGeneration } from './projects/useGeneration';
 import {
+  ProjectDocument,
   ProjectRecord,
   ProjectSummary,
   emptyGeneration,
   nameFromPrompt,
   previewHeadingOf,
 } from './projects/types';
+import { SiteEditor } from './site/SiteEditor';
+import { isSiteDocument } from './site/types';
 import { INITIAL_SPLOT_PROJECT } from './data/splotDemo';
 import { StorageService } from './services/storage';
 import { ProjectState } from './types/document';
@@ -43,7 +46,7 @@ export const NoderaApp: React.FC = () => {
   const [saveState, setSaveState] = useState<SaveState>('saved');
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  const pendingDocument = useRef<ProjectState | null>(null);
+  const pendingDocument = useRef<ProjectDocument | null>(null);
   const autosaveTimer = useRef<number | null>(null);
   const creatingRef = useRef(false);
 
@@ -91,7 +94,7 @@ export const NoderaApp: React.FC = () => {
   /* ---------------------------------------------------------------- */
 
   const writeDocument = useCallback(
-    async (projectId: string, document: ProjectState) => {
+    async (projectId: string, document: ProjectDocument) => {
       setSaveState('saving');
       try {
         const updated = await projectRepository.update(projectId, {
@@ -113,7 +116,7 @@ export const NoderaApp: React.FC = () => {
   );
 
   const handleDocumentChange = useCallback(
-    (document: ProjectState) => {
+    (document: ProjectDocument) => {
       const projectId = activeRecord?.id;
       if (!projectId) return;
       pendingDocument.current = document;
@@ -353,6 +356,11 @@ export const NoderaApp: React.FC = () => {
           resumedFor.current = null;
           void generation.start({ ...activeRecord, generation: emptyGeneration() });
         }}
+        canRetryPreparation={generation.canRetryPreparation}
+        onRetryPreparation={() => {
+          resumedFor.current = activeRecord.id;
+          void generation.retryPreparation();
+        }}
         onStopWatching={generation.stopWatching}
       />
     );
@@ -361,6 +369,24 @@ export const NoderaApp: React.FC = () => {
   if (!activeRecord.document) {
     setRoute({ name: 'generating', projectId: activeRecord.id });
     return null;
+  }
+
+  // Two document models, two editors. Which one opens is decided by the
+  // document itself, so an old node project and a page from Manus can sit
+  // side by side on the dashboard.
+  if (isSiteDocument(activeRecord.document)) {
+    return (
+      <SiteEditor
+        key={activeRecord.id}
+        initialSite={activeRecord.document}
+        projectName={activeRecord.name}
+        onDocumentChange={handleDocumentChange}
+        onSave={handleSaveNow}
+        saveState={saveState}
+        saveError={saveError}
+        onBackToDashboard={backToDashboard}
+      />
+    );
   }
 
   return (

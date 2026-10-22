@@ -1,4 +1,14 @@
 import { ProjectState } from '../types/document';
+import { SiteDocument, SiteOriginal } from '../site/types';
+
+/**
+ * A project holds either kind of document.
+ *
+ * `ProjectState` is the node model the editor composes. `SiteDocument` is a
+ * page someone else designed, kept as source HTML, CSS and assets. Projects
+ * made before site documents existed keep working unchanged.
+ */
+export type ProjectDocument = ProjectState | SiteDocument;
 
 /**
  * Project storage contract.
@@ -16,7 +26,9 @@ export type GenerationStatus =
   | 'starting'
   /** Manus is working. */
   | 'generating'
-  /** The task finished; the result is being fetched and validated. */
+  /** The task finished; its files are being downloaded. */
+  | 'downloading'
+  /** Files are here; the editable copy is being prepared. */
   | 'importing'
   /** Manus is asking a question and will not continue without an answer. */
   | 'waiting'
@@ -59,7 +71,9 @@ export interface ProjectSummary {
 
 /** Summary plus the editable document and generation bookkeeping. */
 export interface ProjectRecord extends ProjectSummary {
-  document: ProjectState | null;
+  document: ProjectDocument | null;
+  /** The untouched delivery, kept so a failed conversion can be retried. */
+  original?: SiteOriginal | null;
   generation: GenerationState;
 }
 
@@ -96,10 +110,15 @@ export function nameFromPrompt(prompt: string): string {
 }
 
 /** The first heading in a document, for the dashboard card. */
-export function previewHeadingOf(document: ProjectState | null): string {
+export function previewHeadingOf(document: ProjectDocument | null): string {
   if (!document) return '';
-  const direction = document.directions[document.activeDirectionId];
-  const page = direction?.pages?.[document.activePageSlug] ?? Object.values(direction?.pages ?? {})[0];
+  if ((document as SiteDocument).kind === 'site') {
+    const match = (document as SiteDocument).html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+    return match ? match[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : '';
+  }
+  const project = document as ProjectState;
+  const direction = project.directions[project.activeDirectionId];
+  const page = direction?.pages?.[project.activePageSlug] ?? Object.values(direction?.pages ?? {})[0];
   if (!page) return '';
 
   let found = '';

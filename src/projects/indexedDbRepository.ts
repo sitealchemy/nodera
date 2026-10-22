@@ -1,6 +1,7 @@
 import { StorageService } from '../services/storage';
 import { ProjectState } from '../types/document';
 import {
+  ProjectDocument,
   ProjectRecord,
   ProjectRepository,
   ProjectSummary,
@@ -101,7 +102,9 @@ function request<T>(req: IDBRequest<T>): Promise<T> {
 
 interface StoredDocument {
   id: string;
-  document: ProjectState | null;
+  document: ProjectDocument | null;
+  /** The untouched Manus delivery, when the project came from one. */
+  original?: ProjectRecord['original'];
   generation: ProjectRecord['generation'];
 }
 
@@ -147,6 +150,7 @@ export class IndexedDbProjectRepository implements ProjectRepository {
       return {
         ...summary,
         document: stored?.document ?? null,
+        original: stored?.original ?? null,
         generation: stored?.generation ?? emptyGeneration(),
       };
     });
@@ -160,6 +164,7 @@ export class IndexedDbProjectRepository implements ProjectRepository {
         tx.objectStore(DOCUMENT_STORE).put({
           id: record.id,
           document: record.document,
+          original: record.original ?? null,
           generation: record.generation,
         } satisfies StoredDocument),
       );

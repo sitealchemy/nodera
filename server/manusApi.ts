@@ -129,6 +129,105 @@ export function listMessages(taskId: string, options: { order?: 'asc' | 'desc'; 
   });
 }
 
+export interface TaskFile {
+  /** Path inside the task sandbox, e.g. /home/ubuntu/site/index.html. */
+  path: string;
+  filename: string;
+  contentType: string;
+  /** Temporary download URL. Refetched rather than stored. */
+  url: string;
+}
+
+/**
+ * Every file the task attached to its messages.
+ *
+ * This is how a generated project actually arrives: `website.status` returns
+ * 404 for a file-producing task, and the Website API documents no way to
+ * download source code at all. The attachments carry a `path` with the full
+ * directory structure, so the project tree can be reconstructed from them
+ * without unpacking the archive.
+ */
+export async function listTaskFiles(
+  taskId: string,
+): Promise<{ ok: true; files: TaskFile[] } | { ok: false; error: ManusFailure }> {
+  const files: TaskFile[] = [];
+  const seen = new Set<string>();
+  let cursor: string | undefined;
+
+  do {
+    const query: Record<string, string> = { task_id: taskId, order: 'asc', limit: '100' };
+    if (cursor) query.cursor = cursor;
+    const result = await callManus('/v2/task.listMessages', { method: 'GET', query });
+    if (!result.ok) return { ok: false, error: result.error };
+
+    (result.data.messages ?? []).forEach((message: any) => {
+      const attachments = [
+        ...(message.assistant_message?.attachments ?? []),
+        ...(message.user_message?.attachments ?? []),
+      ];
+      attachments.forEach((attachment: any) => {
+        if (!attachment?.url) return;
+        const path = String(attachment.path ?? attachment.filename ?? '');
+        if (!path || seen.has(path)) return;
+        seen.add(path);
+        files.push({
+          path,
+          filename: String(attachment.filename ?? path.split('/').pop() ?? 'plik'),
+          contentType: String(attachment.content_type ?? 'application/octet-stream'),
+          url: String(attachment.url),
+        });
+      });
+    });
+
+    cursor = result.data.has_more ? result.data.next_cursor : undefined;
+  } while (cursor);
+
+  return { ok: true, files };
+}
+
+/** Streams one task file, by its sandbox path. */
+export async function fetchTaskFile(
+  taskId: string,
+  path: string,
+): Promise<{ ok: true; body: ArrayBuffer; contentType: string } | { ok: false; error: ManusFailure }> {
+  const listed = await listTaskFiles(taskId);
+  if (!listed.ok) return { ok: false, error: listed.error };
+
+  const file = listed.files.find((candidate) => candidate.path === path);
+  if (!file) {
+    return {
+      ok: false,
+      error: { kind: 'request', status: 404, code: 'not_found', message: `Brak pliku ${path}.` },
+    };
+  }
+
+  try {
+    const response = await fetch(file.url);
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: {
+          kind: 'request',
+          status: response.status,
+          code: 'download_failed',
+          message: `Nie udało się pobrać ${file.filename} (status ${response.status}).`,
+        },
+      };
+    }
+    return { ok: true, body: await response.arrayBuffer(), contentType: file.contentType };
+  } catch (error) {
+    return {
+      ok: false,
+      error: {
+        kind: 'request',
+        status: 0,
+        code: 'network',
+        message: `Błąd pobierania ${file.filename}: ${(error as Error).message}`,
+      },
+    };
+  }
+}
+
 export function sendMessage(taskId: string, text: string) {
   return callManus('/v2/task.sendMessage', {
     method: 'POST',

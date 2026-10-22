@@ -50,6 +50,7 @@ rather than failing obscurely.
 | `bun run test` | Unit tests (Vitest) |
 | `bun run test:e2e` | End-to-end tests (Playwright, Manus mocked) |
 | `bun run test:e2e:report` | Opens the last Playwright HTML report |
+| `bun run fixtures` | Regenerates the fidelity fixture's font and images (they are committed; this only has to be run if they change) |
 
 ---
 
@@ -119,6 +120,32 @@ The main workspace, a five-region layout:
 ---
 
 ## Core concepts
+
+### Two document models
+
+A project holds one of two kinds of document, and which one it is decides which
+editor opens. `isSiteDocument()` (`src/site/types.ts`) is the discriminator.
+
+**`SiteDocument` (`src/site/`)** — a page Manus designed, kept as its own
+source. Manus is given no schema and no list of permitted section kinds: it
+chooses the composition, the typography and the images, and delivers an
+ordinary static site. Nodera downloads those files, keeps the originals
+untouched, and converts a *copy* for editing. The conversion keeps the
+designer's CSS verbatim — grid, `clamp()`, media queries, pseudo-elements,
+hover and focus states all survive, because nothing is rewritten into utility
+classes. Editing works through stable `data-nodera-id` attributes added in
+document order, with no wrapper elements, and style changes are stored as
+override rules rather than inline styles, so the responsive cascade keeps
+working where the user has not overridden it.
+
+The pipeline is `generowanie → pobieranie plików → przygotowanie → gotowe`.
+The download and conversion stages can each be retried on their own, and
+neither asks Manus to design the page again — a conversion fault never costs
+another generation.
+
+**`ProjectState` (`src/types/document.ts`)** — the node model below, used by the
+bundled demo and by every project created before site documents existed. It is
+unchanged, and still opens in the node editor.
 
 ### The document model (`src/types/document.ts`)
 
@@ -267,19 +294,33 @@ other three subpages are identical across all three directions.
 ## Project layout
 
 ```
+server/
+├── manusApi.ts                 Manus API client; the API key lives only here
+└── manusPlugin.ts              Vite plugin mounting /api/manus/*
 src/
-├── App.tsx                     screen routing, all state, all mutation handlers
+├── NoderaApp.tsx               dashboard / generation / editor routing
+├── App.tsx                     the node editor
 ├── main.tsx                    React root
 ├── index.css                   Tailwind import + scrollbar styling
-├── types/document.ts           the whole data model
+├── types/document.ts           the node data model
+├── projects/                   repository, project types, generation hook
+├── manus/client.ts             browser-side client for the local backend
+├── site/                       pages designed by Manus
+│   ├── types.ts                SiteDocument, assets, conversion report
+│   ├── importSite.ts           delivered files → editable copy
+│   ├── renderSite.ts           document → an isolated preview frame
+│   ├── editSite.ts             text, image and style edits; export
+│   ├── ingest.ts               download + convert, as one step
+│   ├── SiteCanvas.tsx          camera, selection and preview widths
+│   └── SiteEditor.tsx          the screen: canvas + inspector
 ├── data/splotDemo.ts           demo project, tokens, image set
 ├── services/
 │   ├── aiAdapter.ts            keyword-matching command interpreter
 │   └── storage.ts              localStorage, snapshots, HTML/JSON export
 └── components/
     ├── Editor/                 TopBar, SidebarLeft, Canvas, SidebarRight, BottomBar
-    └── Views/                  IntakeView, DirectionsView, ProposalView,
-                                PublishChecklistView, CodeExportModal
+    └── Views/                  DashboardView, GeneratingView, IntakeView,
+                                DirectionsView, ProposalView, CodeExportModal
 ```
 
 All state lives in `App.tsx` and flows down as props; there is no context,
@@ -300,6 +341,8 @@ Being explicit, because the UI presents all of these as working features:
 | Pre-publish checklist | A static array of five results, not derived from the document |
 | Form test | `setTimeout(800)`, then success |
 | Comments | Stored in `localStorage` — single-browser, not shared |
+| Page generation | **Genuine** — a real, billed Manus task; its files are downloaded and converted |
+| Visual fidelity | **Measured**, not asserted: `e2e/fidelity.spec.ts` renders the same files as a plain website and through the editor, and compares the pixels at 1440/768/375 px |
 | HTML export | **Genuine** — real traversal, real inline CSS, real downloadable file |
 | JSON export | **Genuine** — the full serialised `ProjectState` |
 | Editor, nudging, tokens, responsive overrides, undo | **Genuine** — these all operate on the real document model |

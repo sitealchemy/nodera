@@ -17,18 +17,30 @@ export interface GeneratingViewProps {
   watching: boolean;
   onBackToDashboard: () => void;
   onAnswer: (text: string) => void;
+  /** Starts a new, separately billed generation. */
   onRetry: () => void;
+  /** Re-runs download and conversion for the task that already finished. */
+  onRetryPreparation: () => void;
+  /** True when there is a finished task whose preparation can be redone. */
+  canRetryPreparation: boolean;
   onStopWatching: () => void;
 }
 
 const STEPS: { key: GenerationState['status']; label: string }[] = [
   { key: 'starting', label: 'Uruchamianie zadania' },
   { key: 'generating', label: 'Generowanie strony' },
+  { key: 'downloading', label: 'Pobieranie plików' },
   { key: 'importing', label: 'Przygotowanie do edycji' },
   { key: 'ready', label: 'Gotowe' },
 ];
 
-const ORDER: GenerationState['status'][] = ['starting', 'generating', 'importing', 'ready'];
+const ORDER: GenerationState['status'][] = [
+  'starting',
+  'generating',
+  'downloading',
+  'importing',
+  'ready',
+];
 
 export const GeneratingView: React.FC<GeneratingViewProps> = ({
   projectName,
@@ -38,6 +50,8 @@ export const GeneratingView: React.FC<GeneratingViewProps> = ({
   onBackToDashboard,
   onAnswer,
   onRetry,
+  onRetryPreparation,
+  canRetryPreparation,
   onStopWatching,
 }) => {
   const [reply, setReply] = useState('');
@@ -147,11 +161,25 @@ export const GeneratingView: React.FC<GeneratingViewProps> = ({
               </div>
             </div>
             <div className="flex gap-2 flex-wrap">
+              {/* The free retry comes first: a download or conversion fault
+                  does not need the page designed again. */}
+              {canRetryPreparation && (
+                <button
+                  onClick={onRetryPreparation}
+                  className="px-3 py-1.5 rounded-lg bg-[#A86645] text-white text-xs font-semibold"
+                >
+                  Przygotuj ponownie
+                </button>
+              )}
               <button
                 onClick={onRetry}
-                className="px-3 py-1.5 rounded-lg bg-[#A86645] text-white text-xs font-semibold"
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${
+                  canRetryPreparation
+                    ? 'border border-rose-300 text-rose-900'
+                    : 'bg-[#A86645] text-white'
+                }`}
               >
-                Spróbuj ponownie
+                {canRetryPreparation ? 'Generuj od nowa' : 'Spróbuj ponownie'}
               </button>
               <button
                 onClick={onBackToDashboard}
@@ -160,6 +188,12 @@ export const GeneratingView: React.FC<GeneratingViewProps> = ({
                 Wróć do projektów
               </button>
             </div>
+            {canRetryPreparation && (
+              <p className="text-[10px] text-rose-800 mt-2 leading-relaxed">
+                „Przygotuj ponownie" korzysta z wyniku, który Manus już oddał, i nic nie kosztuje.
+                „Generuj od nowa" uruchamia nowe, płatne zadanie.
+              </p>
+            )}
             {state.rawResult !== null && state.rawResult !== undefined && (
               <details className="mt-3">
                 <summary className="text-[11px] text-rose-800 cursor-pointer">
@@ -176,7 +210,7 @@ export const GeneratingView: React.FC<GeneratingViewProps> = ({
         {state.warnings.length > 0 && (
           <details className="mb-6">
             <summary className="text-[11px] text-[#706C65] cursor-pointer">
-              Drobne korekty przy imporcie ({state.warnings.length})
+              Ograniczenia konwersji ({state.warnings.length})
             </summary>
             <ul className="mt-2 space-y-1 text-[11px] text-[#706C65]">
               {state.warnings.map((warning, index) => (

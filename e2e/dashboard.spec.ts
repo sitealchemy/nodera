@@ -1,6 +1,12 @@
 import { expect, test, Page } from '@playwright/test';
-import { mockManus, validSpecValue } from './manusMock';
-import { collectPageProblems, documentFrame, waitForDocumentRendered } from './helpers';
+import { fixtureFiles, mockManus } from './manusMock';
+import {
+  collectPageProblems,
+  documentFrame,
+  selectSiteElement,
+  waitForDocumentRendered,
+  waitForSiteRendered,
+} from './helpers';
 
 /**
  * Dashboard, generation and the round trip to the editor and back.
@@ -10,7 +16,10 @@ import { collectPageProblems, documentFrame, waitForDocumentRendered } from './h
  */
 
 const PROMPT =
-  'Strona dla małej piekarni rzemieślniczej w Gdańsku — pieczywo na zakwasie, zamówienia na telefon.';
+  'Strona dla trzech domków do wynajęcia w lesie na Dolnym Śląsku — zdjęcia, ceny, kontakt.';
+
+/** The fixture's hero heading, nested formatting flattened to plain text. */
+const HERO_HEADING = 'Trzy domki, jedna polana';
 
 /** Opens the app with a clean IndexedDB, so each test starts from nothing. */
 async function openDashboard(page: Page) {
@@ -85,11 +94,15 @@ test.describe('generation', () => {
     await expect(page.getByText('Generowanie strony')).toBeVisible();
     await expect(page.locator('[aria-live="polite"]')).toContainText(/Projektuję|Manus|Pobieram/);
 
-    await waitForDocumentRendered(page);
+    await waitForSiteRendered(page);
 
-    // The document is the model's content, in the real editor.
-    await expect(documentFrame(page).locator('h1')).toHaveText('Chleb, który dojrzewa powoli');
-    await expect(documentFrame(page).getByText('Bochenek żytni')).toBeVisible();
+    // Manus's own page, in the real editor: its heading, its nested
+    // formatting, its images.
+    const frame = documentFrame(page);
+    await expect(frame.locator('h1')).toHaveText(/Trzy domki,\s*jedna polana/);
+    await expect(frame.locator('h1 em')).toHaveText('jedna');
+    await expect(frame.locator('img[alt="Domek wśród drzew"]')).toBeVisible();
+    await expect(frame.locator('.cabin')).toHaveCount(3);
     expect(manus.createCount()).toBe(1);
     expect(problems.errors).toEqual([]);
   });
@@ -109,7 +122,7 @@ test.describe('generation', () => {
       button.click();
     });
 
-    await waitForDocumentRendered(page);
+    await waitForSiteRendered(page);
     expect(manus.createCount()).toBe(1);
   });
 
@@ -150,33 +163,49 @@ test.describe('generation', () => {
     await expect(page.getByText('Błąd')).toBeVisible();
   });
 
-  test('an invalid result is reported, kept for diagnosis, and not replaced by the demo', async ({
-    page,
-  }) => {
-    await mockManus(page, { outcome: 'invalid' });
+  test('a delivery with no page is reported, and names what did arrive', async ({ page }) => {
+    await mockManus(page, { outcome: 'noHtml' });
     await openDashboard(page);
 
     await promptField(page).fill(PROMPT);
     await createButton(page).click();
 
     await expect(page.getByText('Nie udało się przygotować strony')).toBeVisible();
-    await expect(page.getByText(/walidacji/i)).toBeVisible();
-
-    // The raw result is retained rather than discarded.
-    await page.getByText('Pokaż otrzymany wynik (do diagnozy)').click();
-    await expect(page.locator('pre')).toContainText('schemaVersion');
+    // Says which files came back, rather than just that something went wrong.
+    await expect(page.getByText(/notatki\.md/)).toBeVisible();
 
     // Nothing from the bundled demo leaked in as a substitute.
     await expect(page.getByText('Pracownia Splot')).toHaveCount(0);
   });
 
-  test('a task that fails on the Manus side is reported as such', async ({ page }) => {
-    await mockManus(page, { outcome: 'failed' });
+  test('a task that attached nothing is reported as such', async ({ page }) => {
+    await mockManus(page, { outcome: 'noFiles' });
     await openDashboard(page);
     await promptField(page).fill(PROMPT);
     await createButton(page).click();
 
-    await expect(page.getByText('Nie udało się zaprojektować strony.')).toBeVisible();
+    await expect(page.getByText(/nie dołączyło żadnych plików/i)).toBeVisible();
+  });
+
+  test('a failed download is retried without paying for a second generation', async ({ page }) => {
+    const manus = await mockManus(page, { outcome: 'downloadFails' });
+    await openDashboard(page);
+    await promptField(page).fill(PROMPT);
+    await createButton(page).click();
+
+    await expect(page.getByText('Nie udało się przygotować strony')).toBeVisible();
+    await expect(page.getByText(/Pobieranie pliku nie powiodło się/)).toBeVisible();
+    // The free retry is offered first, and says plainly which one costs money.
+    await expect(page.getByRole('button', { name: 'Przygotuj ponownie' })).toBeVisible();
+    await expect(page.getByText(/nic nie kosztuje/)).toBeVisible();
+
+    manus.healDownloads();
+    await page.getByRole('button', { name: 'Przygotuj ponownie' }).click();
+
+    await waitForSiteRendered(page);
+    await expect(documentFrame(page).locator('h1')).toHaveText(/Trzy domki/);
+    // One task for the whole episode: the retry re-used it.
+    expect(manus.createCount()).toBe(1);
   });
 
   test('a question from Manus can be answered inside the same task', async ({ page }) => {
@@ -190,7 +219,7 @@ test.describe('generation', () => {
     await page.getByLabel('Odpowiedź dla Manus').fill('Tak, z cenami bochenków');
     await page.getByRole('button', { name: 'Wyślij' }).click();
 
-    await waitForDocumentRendered(page);
+    await waitForSiteRendered(page);
     expect(manus.replies()).toEqual(['Tak, z cenami bochenków']);
     // Still one task: the answer continued it rather than starting another.
     expect(manus.createCount()).toBe(1);
@@ -214,17 +243,17 @@ test.describe('persistence', () => {
     await openDashboard(page);
     await promptField(page).fill(PROMPT);
     await createButton(page).click();
-    await waitForDocumentRendered(page);
+    await waitForSiteRendered(page);
 
-    // Edit the generated heading through the real editor.
-    const heading = documentFrame(page).locator('h1');
-    const box = await heading.boundingBox();
-    await page.keyboard.down('Shift');
-    await page.mouse.click(box!.x + 40, box!.y + 20);
-    await page.keyboard.up('Shift');
-    await page.getByRole('button', { name: 'Tekst' }).click();
-    await page.locator('aside textarea').fill('Chleb prosto z pieca');
-    await expect(heading).toHaveText('Chleb prosto z pieca');
+    // Edit a leaf paragraph through the real editor, and swap an image.
+    await selectSiteElement(page, '.hero__lead');
+    await page.locator('aside textarea').fill('Cisza, drewno i nic do roboty.');
+    await expect(documentFrame(page).locator('.hero__lead')).toHaveText(
+      'Cisza, drewno i nic do roboty.',
+    );
+
+    await selectSiteElement(page, '.hero__figure img');
+    await page.getByRole('textbox', { name: 'Tekst alternatywny' }).fill('Polana o wschodzie');
 
     // Explicit save, with a visible state.
     const saveButton = page.locator('header button', { hasText: /Zapisz|Zapisano/ });
@@ -234,8 +263,15 @@ test.describe('persistence', () => {
 
     await page.reload();
     await openFirstProject(page).click();
-    await waitForDocumentRendered(page);
-    await expect(documentFrame(page).locator('h1')).toHaveText('Chleb prosto z pieca');
+    await waitForSiteRendered(page);
+    // Both edits came back from storage, not from the iframe's live DOM.
+    await expect(documentFrame(page).locator('.hero__lead')).toHaveText(
+      'Cisza, drewno i nic do roboty.',
+    );
+    await expect(documentFrame(page).locator('.hero__figure img')).toHaveAttribute(
+      'alt',
+      'Polana o wschodzie',
+    );
   });
 
   test('undo and redo work on a generated document', async ({ page }) => {
@@ -243,64 +279,76 @@ test.describe('persistence', () => {
     await openDashboard(page);
     await promptField(page).fill(PROMPT);
     await createButton(page).click();
-    await waitForDocumentRendered(page);
+    await waitForSiteRendered(page);
 
-    const heading = documentFrame(page).locator('h1');
-    const original = (await heading.textContent())!.trim();
-    const box = await heading.boundingBox();
-    await page.keyboard.down('Shift');
-    await page.mouse.click(box!.x + 40, box!.y + 20);
-    await page.keyboard.up('Shift');
-    await page.getByRole('button', { name: 'Tekst' }).click();
-    await page.locator('aside textarea').fill('Zmieniony nagłówek');
-    await expect(heading).toHaveText('Zmieniony nagłówek');
+    const lead = documentFrame(page).locator('.hero__lead');
+    const original = (await lead.textContent())!.trim();
+    await selectSiteElement(page, '.hero__lead');
+    await page.locator('aside textarea').fill('Zmieniony akapit');
+    await expect(lead).toHaveText('Zmieniony akapit');
 
-    const undo = page.locator('button[title^="Cofnij"]');
-    await undo.click();
-    await expect(heading).toHaveText(original);
+    await page.locator('button[title^="Cofnij"]').click();
+    await expect(lead).toHaveText(original);
     await page.locator('button[title^="Ponów"]').click();
-    await expect(heading).toHaveText('Zmieniony nagłówek');
+    await expect(lead).toHaveText('Zmieniony akapit');
+  });
+
+  test('a heading with nested formatting is not offered as plain text', async ({ page }) => {
+    await mockManus(page);
+    await openDashboard(page);
+    await promptField(page).fill(PROMPT);
+    await createButton(page).click();
+    await waitForSiteRendered(page);
+
+    // The hero heading holds <em> and <span>. Replacing its whole text would
+    // destroy them, so the editor says so instead of offering the control.
+    await selectSiteElement(page, '.hero__title');
+    await expect(page.locator('aside')).toContainText('zagnieżdżone formatowanie');
+    await expect(page.locator('aside textarea')).toHaveCount(0);
+
+    // The nested markup is still there, untouched.
+    await expect(documentFrame(page).locator('.hero__title em')).toHaveText('jedna');
   });
 
   test('two projects stay independent', async ({ page }) => {
     await mockManus(page);
     await openDashboard(page);
 
-    await promptField(page).fill('Pierwszy projekt — piekarnia');
+    await promptField(page).fill('Pierwszy projekt — domki');
     await createButton(page).click();
-    await waitForDocumentRendered(page);
+    await waitForSiteRendered(page);
     await page.locator('button[title="Wróć do projektów"]').click();
 
-    // Second project, with a different generated heading.
+    // Second project, from a delivery with a different heading.
     await page.unrouteAll({ behavior: 'ignoreErrors' });
-    await mockManus(page, {
-      value: validSpecValue({
-        pages: [
-          {
-            ...validSpecValue().pages[0],
-            sections: validSpecValue().pages[0].sections.map((section: any) =>
-              section.kind === 'hero' ? { ...section, heading: 'Kwiaciarnia na rogu' } : section,
+    const second = fixtureFiles().map((file) =>
+      file.filename === 'index.html'
+        ? {
+            ...file,
+            body: Buffer.from(
+              file.body.toString('utf8').replace('Trzy domki,', 'Kwiaciarnia na rogu,'),
+              'utf8',
             ),
-          },
-        ],
-      }),
-    });
+          }
+        : file,
+    );
+    await mockManus(page, { files: second });
     await promptField(page).fill('Drugi projekt — kwiaciarnia');
     await createButton(page).click();
-    await waitForDocumentRendered(page);
-    await expect(documentFrame(page).locator('h1')).toHaveText('Kwiaciarnia na rogu');
+    await waitForSiteRendered(page);
+    await expect(documentFrame(page).locator('h1')).toContainText('Kwiaciarnia na rogu');
 
     await page.locator('button[title="Wróć do projektów"]').click();
-    await expect(page.getByText('Pierwszy projekt — piekarnia')).toBeVisible();
+    await expect(page.getByText('Pierwszy projekt — domki')).toBeVisible();
     await expect(page.getByText('Drugi projekt — kwiaciarnia')).toBeVisible();
 
     // Opening the first one shows its own document, not the second's.
     await page
-      .locator('li', { hasText: 'Pierwszy projekt — piekarnia' })
+      .locator('li', { hasText: 'Pierwszy projekt — domki' })
       .getByRole('button', { name: 'Otwórz', exact: true })
       .click();
-    await waitForDocumentRendered(page);
-    await expect(documentFrame(page).locator('h1')).toHaveText('Chleb, który dojrzewa powoli');
+    await waitForSiteRendered(page);
+    await expect(documentFrame(page).locator('h1')).toContainText('Trzy domki');
   });
 
   test('renaming and deleting a project', async ({ page }) => {
@@ -308,13 +356,13 @@ test.describe('persistence', () => {
     await openDashboard(page);
     await promptField(page).fill(PROMPT);
     await createButton(page).click();
-    await waitForDocumentRendered(page);
+    await waitForSiteRendered(page);
     await page.locator('button[title="Wróć do projektów"]').click();
 
     await page.locator('button[title="Zmień nazwę"]').first().click();
-    await page.getByLabel('Nazwa projektu').fill('Piekarnia Zakwas');
+    await page.getByLabel('Nazwa projektu').fill('Między Drzewami');
     await page.keyboard.press('Enter');
-    await expect(page.getByText('Piekarnia Zakwas')).toBeVisible();
+    await expect(page.getByText('Między Drzewami')).toBeVisible();
 
     await page.locator('button[title="Usuń projekt"]').first().click();
     await expect(page.getByRole('alertdialog')).toBeVisible();
@@ -411,7 +459,7 @@ test.describe('no regression in the editor', () => {
     await openDashboard(page);
     await promptField(page).fill(PROMPT);
     await createButton(page).click();
-    await waitForDocumentRendered(page);
+    await waitForSiteRendered(page);
 
     const camera = () =>
       page.evaluate(() => {
@@ -440,18 +488,21 @@ test.describe('no regression in the editor', () => {
     await page.keyboard.up('Shift');
     await expect(page.locator('div.absolute.border-2')).toBeVisible();
 
-    // Mobile preview applies the generated responsive override.
+    // Mobile preview applies the designer's own media queries: at 375px the
+    // cabin grid collapses to one column and the nav links are hidden.
     await page.locator('button[title="Smartfon (375 px)"]').click();
     const mobile = await page.evaluate(() => {
       const frame = document.querySelector('iframe[title="Podgląd strony"]') as HTMLIFrameElement;
       const doc = frame.contentDocument!;
-      const h1 = doc.querySelector('h1')!;
+      const view = doc.defaultView!;
       return {
         width: frame.style.width,
-        fontSize: doc.defaultView!.getComputedStyle(h1).fontSize,
+        grid: view.getComputedStyle(doc.querySelector('.cabins__grid')!).gridTemplateColumns,
+        navLink: view.getComputedStyle(doc.querySelector('.main-nav a')!).display,
       };
     });
     expect(mobile.width).toBe('375px');
-    expect(mobile.fontSize).toBe('34px');
+    expect(mobile.grid.split(' ').length).toBe(1);
+    expect(mobile.navLink).toBe('none');
   });
 });

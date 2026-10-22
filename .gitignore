@@ -12,3 +12,6 @@ package-lock.json
 e2e-results/
 e2e-report/
 e2e-screenshots/
+
+# Probe output: large binaries from a real Manus run (kept locally only)
+scripts/probe-out/

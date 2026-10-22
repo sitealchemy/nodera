@@ -1,27 +1,34 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { POLL_INTERVAL_MS, createTask, fetchStatus, replyToTask } from '../manus/client';
-import { buildProjectFromSpec } from '../manus/buildDocument';
-import { validatePageSpec } from '../manus/pageSpec';
+import { importSite } from '../site/importSite';
+import { ingestTaskOutput, parseHtml, serialise } from '../site/ingest';
+import { SiteOriginal } from '../site/types';
 import { projectRepository } from './indexedDbRepository';
 import { GenerationState, ProjectRecord } from './types';
 
 /**
  * Drives one project's generation from prompt to editable document.
  *
- * Two properties this hook exists to guarantee:
+ * Four properties this hook exists to guarantee:
  *
  * - A task is created at most once. The task id is persisted before anything
  *   else, so a reload re-attaches to the running task instead of starting a
  *   second, separately billed one. A double click cannot start two either.
- * - A failed import never destroys the prompt, the task id or the raw result.
- *   The project stays in the list with its error, and the result is kept for
- *   diagnosis rather than replaced by a demo document.
+ * - A failed conversion never destroys the prompt, the task id or the files
+ *   Manus delivered. The project stays in the list with its error, and the
+ *   delivery is kept so it can be inspected.
+ * - The two stages after generation — downloading the files and converting a
+ *   copy of them — can each be retried on their own. Neither costs anything,
+ *   because neither asks Manus to design the page again.
+ * - The original delivery is stored next to the editable copy, so the copy can
+ *   always be rebuilt from it.
  */
 
 const PHASE_MESSAGE: Record<string, string> = {
   starting: 'Uruchamiam zadanie…',
   generating: 'Manus projektuje stronę…',
-  importing: 'Pobieram wynik i przygotowuję do edycji…',
+  downloading: 'Pobieram pliki strony…',
+  importing: 'Przygotowuję kopię do edycji…',
   waiting: 'Manus pyta o szczegóły.',
   ready: 'Gotowe.',
 };
@@ -34,6 +41,15 @@ export interface GenerationController {
   resume: (record: ProjectRecord) => void;
   /** Answers a question from Manus inside the same task. */
   answer: (text: string) => Promise<void>;
+  /**
+   * Re-runs download and conversion for a task that already finished.
+   *
+   * Uses files already on disk when there are any, so a conversion fault is
+   * retried without touching the network — and never by generating again.
+   */
+  retryPreparation: () => Promise<void>;
+  /** True when the failure is in a stage that `retryPreparation` can redo. */
+  canRetryPreparation: boolean;
   /** Stops polling here. Does NOT cancel the task at Manus. */
   stopWatching: () => void;
   watching: boolean;
@@ -91,6 +107,19 @@ export function useGeneration(
     }
   }, []);
 
+  /**
+   * Shows progress without touching storage.
+   *
+   * File-by-file download progress is worth showing and not worth writing: one
+   * IndexedDB transaction per downloaded image would be pure overhead, and the
+   * phase itself is already persisted on either side of the loop.
+   */
+  const report = useCallback((message: string) => {
+    const next = { ...stateRef.current, message };
+    stateRef.current = next;
+    setState(next);
+  }, []);
+
   const clearTimer = useCallback(() => {
     if (pollTimer.current !== null) {
       window.clearTimeout(pollTimer.current);
@@ -103,65 +132,149 @@ export function useGeneration(
     setWatching(false);
   }, [clearTimer]);
 
-  /** Validates, builds and stores the document. */
-  const importResult = useCallback(
-    async (taskId: string, value: unknown, prompt: string, projectName: string) => {
+  /** Stores a finished document and hands the record to the editor. */
+  const finish = useCallback(
+    async (taskId: string, document: ProjectRecord['document'], original: SiteOriginal) => {
+      const id = projectIdRef.current;
+      if (!id) return;
+      const record = await projectRepository.update(id, {
+        document,
+        original,
+        status: 'ready',
+        generation: {
+          ...stateRef.current,
+          status: 'ready',
+          taskId,
+          message: PHASE_MESSAGE.ready,
+          error: null,
+          question: null,
+          rawResult: null,
+          updatedAt: Date.now(),
+        },
+      });
+      stateRef.current = record.generation;
+      setState(record.generation);
+      onReadyRef.current(record);
+    },
+    [],
+  );
+
+  /**
+   * Downloads the task's files and converts a copy of them.
+   *
+   * The original files are written even when the conversion fails: that is
+   * what makes the next attempt free, and what lets the delivery be looked at
+   * rather than guessed about.
+   */
+  const prepare = useCallback(
+    async (taskId: string) => {
       const id = projectIdRef.current;
       if (!id) return;
 
-      await persist({ status: 'importing', message: PHASE_MESSAGE.importing, error: null });
+      await persist({ status: 'downloading', message: PHASE_MESSAGE.downloading, error: null });
 
-      const validation = validatePageSpec(value);
-      if (!validation.ok) {
-        const detail = validation.errors.map((issue) => `${issue.path || 'wynik'}: ${issue.message}`);
+      const result = await ingestTaskOutput(taskId, (progress) => {
+        if (progress.total > 0 && progress.downloaded >= progress.total) {
+          report(PHASE_MESSAGE.importing);
+          return;
+        }
+        report(
+          `Pobieram pliki (${progress.downloaded + 1}/${progress.total})` +
+            (progress.current ? ` — ${progress.current}` : '…'),
+        );
+      });
+
+      if (!result.ok) {
+        // Whatever arrived is kept, so a retry starts from the files rather
+        // than from the network, and nothing has to be generated again.
+        if (result.original) {
+          try {
+            await projectRepository.update(id, { original: result.original });
+          } catch {
+            /* the error below is the thing the user needs to see */
+          }
+        }
         await persist({
           status: 'error',
-          error: `Wynik nie przeszedł walidacji. ${detail.join(' ')}`,
-          // Kept deliberately: the prompt, the task and the raw value all stay.
-          rawResult: value,
-          warnings: validation.warnings.map((issue) => `${issue.path}: ${issue.message}`),
+          error: result.reason,
+          warnings: [],
           message: '',
         });
         return;
       }
 
-      try {
-        const document = buildProjectFromSpec(validation.spec, {
-          projectId: id,
-          projectName,
-          prompt,
-        });
-        const record = await projectRepository.update(id, {
-          document,
-          status: 'ready',
-          generation: {
-            ...stateRef.current,
-            status: 'ready',
-            taskId,
-            message: PHASE_MESSAGE.ready,
-            error: null,
-            question: null,
-            warnings: validation.warnings.map((issue) => `${issue.path}: ${issue.message}`),
-            rawResult: null,
-            updatedAt: Date.now(),
-          },
-        });
-        setState(record.generation);
-        onReadyRef.current(record);
-      } catch (error) {
-        await persist({
-          status: 'error',
-          error: `Nie udało się zbudować dokumentu: ${(error as Error).message}`,
-          rawResult: value,
-          message: '',
-        });
-      }
+      await persist({ warnings: result.document.report.limitations });
+      await finish(taskId, result.document, result.original);
     },
-    [persist],
+    [finish, persist, report],
   );
 
+  /**
+   * Re-runs the conversion from files already stored, or re-downloads them.
+   *
+   * Deliberately never calls `createTask`: a conversion fault is ours, and
+   * making the user pay for another generation to work around it would be
+   * both expensive and dishonest about where the fault is.
+   */
+  const retryPreparation = useCallback(
+    async () => {
+      const id = projectIdRef.current;
+      const taskId = stateRef.current.taskId;
+      if (!id || !taskId) return;
+
+      // Read the record rather than taking one from the caller: a failed
+      // download writes what it managed to fetch, and the screen offering
+      // this retry still holds the record from before that write.
+      let stored: SiteOriginal | null | undefined;
+      try {
+        stored = (await projectRepository.get(id))?.original;
+      } catch {
+        stored = null;
+      }
+
+      // Only a complete delivery is worth converting again. Anything less and
+      // the files are fetched afresh — which still costs nothing, because the
+      // task is never asked to design the page a second time.
+      if (!stored || !stored.complete || stored.files.length === 0) {
+        await prepare(taskId);
+        return;
+      }
+
+      await persist({ status: 'importing', message: PHASE_MESSAGE.importing, error: null });
+      const result = importSite(
+        stored.files.map((file) => ({
+          path: file.path,
+          contentType: file.contentType,
+          text: file.text,
+          blob: file.blob,
+          bytes: file.blob?.size,
+        })),
+        parseHtml,
+        serialise,
+      );
+
+      if (!result.ok) {
+        await persist({
+          status: 'error',
+          error: `${result.reason} Pobrane pliki: ${result.files.join(', ')}`,
+          message: '',
+        });
+        return;
+      }
+
+      await persist({ warnings: result.document.report.limitations });
+      await finish(taskId, result.document, stored);
+    },
+    [finish, persist, prepare],
+  );
+
+  // Derived from the live generation state, not from a project record: the
+  // record on screen is the one that was loaded before the task ran, and it
+  // still says the project has no task at all.
+  const canRetryPreparation = state.status === 'error' && state.taskId !== null;
+
   const poll = useCallback(
-    async (taskId: string, prompt: string, projectName: string) => {
+    async (taskId: string) => {
       try {
         const status = await fetchStatus(taskId);
 
@@ -186,29 +299,9 @@ export function useGeneration(
         }
 
         if (status.phase === 'stopped') {
-          const result = status.structuredResult;
-          if (!result) {
-            await persist({
-              status: 'error',
-              error:
-                'Zadanie zakończyło się bez wyniku strukturalnego. Otwórz zadanie w Manus, aby sprawdzić przebieg.',
-              message: '',
-            });
-            setWatching(false);
-            return;
-          }
-          if (!result.success) {
-            await persist({
-              status: 'error',
-              error: result.error ?? 'Manus nie zdołał wygenerować strony.',
-              rawResult: result.value,
-              message: '',
-            });
-            setWatching(false);
-            return;
-          }
           setWatching(false);
-          await importResult(taskId, result.value, prompt, projectName);
+          // The deliverable is the attached files, not a structured result.
+          await prepare(taskId);
           return;
         }
 
@@ -218,10 +311,7 @@ export function useGeneration(
           message: status.brief || PHASE_MESSAGE.generating,
           error: null,
         });
-        pollTimer.current = window.setTimeout(
-          () => void poll(taskId, prompt, projectName),
-          POLL_INTERVAL_MS,
-        );
+        pollTimer.current = window.setTimeout(() => void poll(taskId), POLL_INTERVAL_MS);
       } catch (error) {
         await persist({
           status: 'error',
@@ -231,7 +321,7 @@ export function useGeneration(
         setWatching(false);
       }
     },
-    [importResult, persist],
+    [persist, prepare],
   );
 
   const resume = useCallback(
@@ -240,7 +330,7 @@ export function useGeneration(
       if (record.generation.status === 'ready') return;
       clearTimer();
       setWatching(true);
-      void poll(record.generation.taskId, record.prompt, record.name);
+      void poll(record.generation.taskId);
     },
     [clearTimer, poll],
   );
@@ -268,7 +358,7 @@ export function useGeneration(
           error: null,
         });
         setWatching(true);
-        void poll(task.taskId, record.prompt, record.name);
+        void poll(task.taskId);
       } catch (error) {
         startedRef.current = false;
         await persist({
@@ -288,7 +378,7 @@ export function useGeneration(
       try {
         await replyToTask(state.taskId, text);
         setWatching(true);
-        void poll(state.taskId, '', '');
+        void poll(state.taskId);
       } catch (error) {
         await persist({ status: 'error', error: (error as Error).message, message: '' });
       }
@@ -298,5 +388,14 @@ export function useGeneration(
 
   useEffect(() => clearTimer, [clearTimer]);
 
-  return { state, start, resume, answer, stopWatching, watching };
+  return {
+    state,
+    start,
+    resume,
+    answer,
+    retryPreparation,
+    canRetryPreparation,
+    stopWatching,
+    watching,
+  };
 }

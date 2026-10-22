@@ -1,11 +1,11 @@
 import { expect, test, Page } from '@playwright/test';
 import { mockManus } from './manusMock';
-import { documentFrame, waitForDocumentRendered } from './helpers';
+import { documentFrame, waitForDocumentRendered, waitForSiteRendered } from './helpers';
 
 /** Screenshots of the new screens, each with geometry assertions. */
 
 const SHOTS = 'e2e-screenshots';
-const PROMPT = 'Strona dla małej piekarni rzemieślniczej w Gdańsku — pieczywo na zakwasie.';
+const PROMPT = 'Strona dla trzech domków do wynajęcia w lesie na Dolnym Śląsku.';
 
 async function fresh(page: Page) {
   await page.addInitScript(() => {
@@ -42,7 +42,7 @@ test.describe('visual: dashboard and generation', () => {
     await fresh(page);
     await page.getByLabel('Opis strony').fill(PROMPT);
     await page.getByRole('button', { name: 'Stwórz stronę' }).click();
-    await waitForDocumentRendered(page);
+    await waitForSiteRendered(page);
     await page.locator('button[title="Wróć do projektów"]').click();
     await page.getByRole('button', { name: /projekt demonstracyjny/i }).click();
     await waitForDocumentRendered(page);
@@ -76,7 +76,7 @@ test.describe('visual: dashboard and generation', () => {
   });
 
   test('generation error', async ({ page }) => {
-    await mockManus(page, { outcome: 'invalid' });
+    await mockManus(page, { outcome: 'noHtml' });
     await page.setViewportSize({ width: 1366, height: 768 });
     await fresh(page);
     await page.getByLabel('Opis strony').fill(PROMPT);
@@ -94,38 +94,39 @@ test.describe('visual: dashboard and generation', () => {
     await fresh(page);
     await page.getByLabel('Opis strony').fill(PROMPT);
     await page.getByRole('button', { name: 'Stwórz stronę' }).click();
-    await waitForDocumentRendered(page);
+    await waitForSiteRendered(page);
     await page.screenshot({ path: `${SHOTS}/14-generated-in-editor.png` });
 
-    // Editor chrome and the save control coexist without collision.
+    // Editor chrome fits: the save control sits left of the export control
+    // rather than on top of it.
     const save = (await page.locator('header button', { hasText: /Zapisz|Zapisano/ }).boundingBox())!;
-    const preview = (await page.locator('button[title^="Otwórz podgląd"]').boundingBox())!;
-    expect(save.x + save.width).toBeLessThanOrEqual(preview.x + 1);
+    const download = (await page.locator('button[title^="Pobierz pliki"]').boundingBox())!;
+    expect(save.x + save.width).toBeLessThanOrEqual(download.x + 1);
     await expect(documentFrame(page).locator('h1')).toBeVisible();
   });
 
-  test('generated page in mobile preview', async ({ page }) => {
+  test('generated page at phone width', async ({ page }) => {
     await mockManus(page);
     await page.setViewportSize({ width: 1366, height: 768 });
     await fresh(page);
     await page.getByLabel('Opis strony').fill(PROMPT);
     await page.getByRole('button', { name: 'Stwórz stronę' }).click();
-    await waitForDocumentRendered(page);
+    await waitForSiteRendered(page);
 
     await page.locator('button[title="Smartfon (375 px)"]').click();
-    await page.locator('button[title^="Otwórz podgląd"]').click();
-    await waitForDocumentRendered(page);
+    await page.locator('button[title="Dopasuj szerokość"]').click();
     await page.screenshot({ path: `${SHOTS}/15-generated-mobile-preview.png` });
 
     const state = await page.evaluate(() => {
       const frame = document.querySelector('iframe[title="Podgląd strony"]') as HTMLIFrameElement;
       const doc = frame.contentDocument!;
       return {
-        width: Math.round(frame.getBoundingClientRect().width),
+        width: parseFloat(frame.style.width),
         overflow: doc.documentElement.scrollWidth > doc.documentElement.clientWidth + 1,
       };
     });
     expect(state.width).toBe(375);
+    // The designer's own layout holds at phone width: no sideways scroll.
     expect(state.overflow).toBe(false);
   });
 });
@@ -137,10 +138,10 @@ test.describe('status accuracy', () => {
     await fresh(page);
     await page.getByLabel('Opis strony').fill(PROMPT);
     await page.getByRole('button', { name: 'Stwórz stronę' }).click();
-    await waitForDocumentRendered(page);
+    await waitForSiteRendered(page);
     await page.locator('button[title="Wróć do projektów"]').click();
 
-    const card = page.locator('li').filter({ hasText: 'piekarni' });
+    const card = page.locator('li').filter({ hasText: 'domków' });
     await expect(card.getByText('Gotowy')).toBeVisible();
     await expect(card.getByText('Przygotowanie')).toHaveCount(0);
   });
@@ -153,7 +154,7 @@ test.describe('save state accuracy', () => {
     await fresh(page);
     await page.getByLabel('Opis strony').fill(PROMPT);
     await page.getByRole('button', { name: 'Stwórz stronę' }).click();
-    await waitForDocumentRendered(page);
+    await waitForSiteRendered(page);
 
     // Nothing has been edited, so the control must read "Zapisano".
     const save = page.locator('header button', { hasText: /Zapisz|Zapisano/ });
@@ -162,25 +163,43 @@ test.describe('save state accuracy', () => {
     // Reopening an existing project behaves the same way.
     await page.locator('button[title="Wróć do projektów"]').click();
     await page.locator('li').first().getByRole('button', { name: 'Otwórz', exact: true }).click();
-    await waitForDocumentRendered(page);
+    await waitForSiteRendered(page);
     await expect(page.locator('header button', { hasText: /Zapisz|Zapisano/ })).toContainText(
       'Zapisano',
     );
   });
 
-  test('a call-to-action link is not underlined like body text', async ({ page }) => {
+  test('the designer own type and colour survive the import', async ({ page }) => {
     await mockManus(page);
     await fresh(page);
     await page.getByLabel('Opis strony').fill(PROMPT);
     await page.getByRole('button', { name: 'Stwórz stronę' }).click();
-    await waitForDocumentRendered(page);
+    await waitForSiteRendered(page);
 
-    const decoration = await page.evaluate(() => {
+    const styles = await page.evaluate(() => {
       const frame = document.querySelector('iframe[title="Podgląd strony"]') as HTMLIFrameElement;
       const doc = frame.contentDocument!;
-      const cta = doc.querySelector('a[href^="tel:"]')!;
-      return doc.defaultView!.getComputedStyle(cta).textDecorationLine;
+      const view = doc.defaultView!;
+      const title = view.getComputedStyle(doc.querySelector('.hero__title')!);
+      const eyebrow = view.getComputedStyle(doc.querySelector('.eyebrow')!);
+      const button = view.getComputedStyle(doc.querySelector('.button--solid')!);
+      return {
+        titleFamily: title.fontFamily,
+        titleSize: parseFloat(title.fontSize),
+        eyebrowFamily: eyebrow.fontFamily,
+        // The custom face, loaded from an asset rather than a CDN.
+        eyebrowFace: doc.fonts.check("11px 'Nodera Blocks'"),
+        buttonRadius: button.borderRadius,
+        buttonDecoration: button.textDecorationLine,
+      };
     });
-    expect(decoration).toBe('none');
+
+    expect(styles.titleFamily).toContain('Georgia');
+    // clamp() still resolves against the preview width, not the window's.
+    expect(styles.titleSize).toBeGreaterThan(60);
+    expect(styles.eyebrowFamily).toContain('Nodera Blocks');
+    expect(styles.eyebrowFace).toBe(true);
+    expect(styles.buttonRadius).toBe('999px');
+    expect(styles.buttonDecoration).toBe('none');
   });
 });

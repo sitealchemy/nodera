@@ -75,6 +75,28 @@ export function useCanvasGestures({
     [setCamera, viewportSize],
   );
 
+  // --- The viewport must never scroll --------------------------------------
+  // Pan is the only translation in this model: every screen/document
+  // conversion, and every overlay rectangle, is computed from the camera and
+  // the viewport's own box. `overflow: hidden` stops the user scrolling, but
+  // the browser still scrolls the box programmatically — to reveal a focused
+  // element, or for scrollIntoView — and a scrolled viewport moves the
+  // artboard without moving the camera. Hit-testing then lands on whatever
+  // happens to be at the stale coordinates. Pinning the offsets back to zero
+  // keeps the invariant instead of threading a scroll offset through all the
+  // maths.
+  useEffect(() => {
+    const element = viewportRef.current;
+    if (!element) return;
+    const pin = () => {
+      if (element.scrollLeft !== 0) element.scrollLeft = 0;
+      if (element.scrollTop !== 0) element.scrollTop = 0;
+    };
+    pin();
+    element.addEventListener('scroll', pin);
+    return () => element.removeEventListener('scroll', pin);
+  }, [viewportRef]);
+
   // --- Space key -----------------------------------------------------------
   // Space must type a space when the user is in a field, so text entry targets
   // are excluded before the key is treated as a modifier.

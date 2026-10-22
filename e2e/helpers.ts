@@ -251,3 +251,83 @@ export function collectPageProblems(page: Page): { errors: string[]; console: st
 
   return { errors, console: consoleErrors };
 }
+
+/* ------------------------------------------------------------------ */
+/* Site documents (pages designed by Manus)                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Waits until the imported page is rendered inside the frame.
+ *
+ * Site documents carry `data-nodera-id`, not the node model's
+ * `data-node-id`, so the two editors need different readiness checks.
+ */
+export async function waitForSiteRendered(page: Page): Promise<void> {
+  await page.locator('iframe[title="Podgląd strony"]').waitFor({ state: 'attached' });
+  await expect(documentFrame(page).locator('[data-nodera-id]').first()).toBeAttached({
+    timeout: 30_000,
+  });
+}
+
+/**
+ * Waits for the page's own resources to settle.
+ *
+ * Fonts and images load asynchronously from blob URLs; screenshotting before
+ * they are decoded compares a half-painted page and fails for the wrong
+ * reason. Fixed delays would only hide that, so this waits on the browser's
+ * own readiness signals.
+ */
+export async function waitForFrameResources(page: Page): Promise<void> {
+  await page.waitForFunction(
+    () => {
+      const frame = document.querySelector('iframe[title="Podgląd strony"]') as HTMLIFrameElement;
+      const doc = frame?.contentDocument;
+      if (!doc || doc.readyState !== 'complete') return false;
+      if (doc.fonts && doc.fonts.status !== 'loaded') return false;
+      const images = [...doc.images];
+      return images.every((image) => image.complete && image.naturalWidth > 0);
+    },
+    undefined,
+    { timeout: 30_000 },
+  );
+}
+
+/**
+ * Shift-clicks an element inside the page, the way a user selects it.
+ *
+ * Deliberately does not call `scrollIntoViewIfNeeded`: the canvas is panned by
+ * the camera, not by scrolling, and asking the browser to scroll it would
+ * either be undone or move the artboard out from under the coordinates that
+ * were just measured. An element off-camera is a mistake in the test, so it
+ * says so instead of clicking somewhere arbitrary.
+ */
+export async function selectSiteElement(page: Page, selector: string): Promise<void> {
+  const target = documentFrame(page).locator(selector).first();
+  const box = await target.boundingBox();
+  if (!box) throw new Error(`Element ${selector} has no box; is it visible?`);
+
+  const canvasBox = (await page.locator('div[style*="cursor"]').first().boundingBox())!;
+  const x = box.x + Math.min(box.width / 2, 30);
+  const y = box.y + Math.min(box.height / 2, 12);
+  const inside =
+    x >= canvasBox.x &&
+    x <= canvasBox.x + canvasBox.width &&
+    y >= canvasBox.y &&
+    y <= canvasBox.y + canvasBox.height;
+  if (!inside) {
+    throw new Error(
+      `Element ${selector} is at (${x.toFixed(0)}, ${y.toFixed(0)}), outside the canvas; ` +
+        'pan or zoom to it before selecting.',
+    );
+  }
+
+  await page.keyboard.down('Shift');
+  await page.mouse.click(x, y);
+  await page.keyboard.up('Shift');
+  await expect(page.locator('aside')).toBeVisible();
+}
+
+/** Reads the stored site document of the most recently updated project. */
+export async function readSiteDocument(page: Page): Promise<any> {
+  return readProject(page);
+}

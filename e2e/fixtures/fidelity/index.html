@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Fixture wierności konwersji — strona testowa Nodery.">
+  <title>Między Drzewami — fixture wierności</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip-link" href="#tresc">Przejdź do treści</a>
+
+  <div class="notice" role="note">
+    <span class="notice__mark" aria-hidden="true">✦</span>
+    REZERWACJE 2026 OTWARTE
+  </div>
+
+  <header class="site-header">
+    <div class="shell header__inner">
+      <a class="brand" href="#start">
+        <img class="brand__sign" src="assets/images/znak.svg" alt="Znak trzech drzew" width="120" height="120">
+        <span class="brand__text">Między<em>Drzewami</em></span>
+      </a>
+      <nav class="main-nav" aria-label="Główna nawigacja">
+        <a href="#domki">Domki</a>
+        <a href="#miejsce">Miejsce</a>
+        <a class="main-nav__cta" href="#kontakt">Zapytaj o termin</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="tresc">
+    <!-- Two-column hero: the layout most at risk from a lossy conversion. -->
+    <section class="hero" id="start">
+      <div class="shell hero__inner">
+        <div class="hero__copy">
+          <p class="eyebrow">DOLNY SLASK</p>
+          <h1 class="hero__title">
+            Trzy domki,<br>
+            <em>jedna</em> <span class="hero__accent">polana</span>
+          </h1>
+          <p class="hero__lead">
+            Drewno, szkło i cisza. Budziki zostawiamy w domu — tutaj dzień zaczyna
+            się od światła między gałęziami.
+          </p>
+          <div class="hero__actions">
+            <a class="button button--solid" href="#kontakt">Sprawdź terminy</a>
+            <a class="button button--ghost" href="#domki">Zobacz domki</a>
+          </div>
+          <dl class="hero__facts">
+            <div><dt>Domki</dt><dd>3</dd></div>
+            <div><dt>Osób</dt><dd>2–4</dd></div>
+            <div><dt>Las</dt><dd>14 ha</dd></div>
+          </dl>
+        </div>
+        <figure class="hero__figure">
+          <img src="assets/images/hero-las.png" alt="Domek wśród drzew" width="800" height="420">
+          <figcaption>Polana wschodnia, czerwiec</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <!-- CSS grid with a decorative background image behind it. -->
+    <section class="cabins" id="domki">
+      <div class="shell">
+        <p class="eyebrow eyebrow--light">NASZE DOMKI</p>
+        <h2 class="section__title">Każdy inny, <em>każdy osobno</em></h2>
+        <div class="cabins__grid">
+          <article class="cabin">
+            <img src="assets/images/domek.png" alt="Domek Sosna" width="640" height="420">
+            <div class="cabin__body">
+              <h3>Sosna <span class="cabin__size">32 m²</span></h3>
+              <p>Taras na południe, piec na drewno, wanna pod oknem.</p>
+              <p class="cabin__price">od <strong>640 zł</strong> / noc</p>
+            </div>
+          </article>
+          <article class="cabin">
+            <img src="assets/images/wnetrze.png" alt="Domek Brzoza" width="640" height="420">
+            <div class="cabin__body">
+              <h3>Brzoza <span class="cabin__size">28 m²</span></h3>
+              <p>Antresola pod szklanym dachem, kuchnia na całą ścianę.</p>
+              <p class="cabin__price">od <strong>580 zł</strong> / noc</p>
+            </div>
+          </article>
+          <article class="cabin cabin--wide">
+            <img src="assets/images/domek.png" alt="Domek Dąb" width="640" height="420">
+            <div class="cabin__body">
+              <h3>Dąb <span class="cabin__size">46 m²</span></h3>
+              <p>Dwie sypialnie, kominek i najdłuższy taras na polanie.</p>
+              <p class="cabin__price">od <strong>820 zł</strong> / noc</p>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="place" id="miejsce">
+      <div class="shell place__inner">
+        <!-- Inline SVG, which must survive serialisation unchanged. -->
+        <svg class="place__map" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <defs>
+            <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#42624c"/>
+              <stop offset="1" stop-color="#193b2c"/>
+            </linearGradient>
+          </defs>
+          <circle cx="100" cy="100" r="92" fill="url(#fade)"/>
+          <path d="M20 140 Q70 90 100 120 T180 80" fill="none" stroke="#e7dfcd" stroke-width="3" stroke-dasharray="8 6"/>
+          <circle cx="100" cy="120" r="7" fill="#ad4d31"/>
+          <text x="100" y="178" text-anchor="middle" fill="#e7dfcd" font-size="13">14 ha</text>
+        </svg>
+        <div class="place__copy">
+          <p class="eyebrow">GDZIE TO JEST</p>
+          <h2 class="section__title">Dwadzieścia minut od <em>asfaltu</em></h2>
+          <ul class="place__list">
+            <li>Wrocław — 70 km</li>
+            <li>Najbliższy sklep — 6 km</li>
+            <li>Szlak czerwony — 400 m od tarasu</li>
+          </ul>
+          <blockquote class="quote">
+            Spaliśmy przy otwartym oknie przez trzy noce i ani razu nie obudził nas
+            żaden samochód.
+            <cite>Marta i Piotr, maj 2025</cite>
+          </blockquote>
+        </div>
+      </div>
+    </section>
+
+    <section class="contact" id="kontakt">
+      <div class="shell contact__inner">
+        <h2 class="section__title">Napisz, sprawdzimy <em>termin</em></h2>
+        <p class="contact__lead">Odpowiadamy tego samego dnia, zwykle przed wieczorem.</p>
+        <a class="button button--solid button--large" href="mailto:polana@example.test">polana@example.test</a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="shell footer__inner">
+      <span class="footer__brand">Między Drzewami</span>
+      <span>Polana Wschodnia 3, 58-540 Karpacz</span>
+      <span>© 2026</span>
+    </div>
+  </footer>
+</body>
+</html>

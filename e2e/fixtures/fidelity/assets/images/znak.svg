@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120" role="img" aria-label="Znak trzech drzew">
+  <circle cx="60" cy="60" r="56" fill="none" stroke="#ad4d31" stroke-width="4"/>
+  <path d="M60 18 L84 70 H36 Z" fill="#193b2c"/>
+  <path d="M60 44 L94 96 H26 Z" fill="#42624c"/>
+  <rect x="56" y="92" width="8" height="18" fill="#ad4d31"/>
+</svg>

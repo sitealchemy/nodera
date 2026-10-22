@@ -1,5 +1,3 @@
-import { MANUS_OUTPUT_SCHEMA } from './pageSpec';
-
 /**
  * Browser-side client for the local Manus backend.
  *
@@ -61,10 +59,42 @@ export async function createTask(prompt: string): Promise<CreatedTask> {
     await fetch('/api/manus/task', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt, schema: MANUS_OUTPUT_SCHEMA }),
+      body: JSON.stringify({ prompt }),
     }),
   );
   return { taskId: payload.taskId, taskUrl: payload.taskUrl ?? null, title: payload.title ?? '' };
+}
+
+export interface TaskFileInfo {
+  path: string;
+  filename: string;
+  contentType: string;
+}
+
+/** The files a finished task attached, with their directory structure. */
+export async function fetchTaskFiles(taskId: string): Promise<TaskFileInfo[]> {
+  const payload = await parse(
+    await fetch(`/api/manus/files?taskId=${encodeURIComponent(taskId)}`),
+  );
+  return payload.files ?? [];
+}
+
+/** Downloads one task file through the local backend. */
+export async function fetchTaskFile(taskId: string, path: string): Promise<Blob> {
+  const response = await fetch(
+    `/api/manus/file?taskId=${encodeURIComponent(taskId)}&path=${encodeURIComponent(path)}`,
+  );
+  if (!response.ok) {
+    let message = `Nie udało się pobrać pliku (status ${response.status}).`;
+    try {
+      const payload = await response.json();
+      if (payload?.message) message = payload.message;
+    } catch {
+      /* not JSON */
+    }
+    throw new ManusClientError('download_failed', message);
+  }
+  return response.blob();
 }
 
 export async function fetchStatus(taskId: string): Promise<TaskStatus> {
