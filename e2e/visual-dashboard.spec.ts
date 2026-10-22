@@ -97,11 +97,13 @@ test.describe('visual: dashboard and generation', () => {
     await waitForSiteRendered(page);
     await page.screenshot({ path: `${SHOTS}/14-generated-in-editor.png` });
 
-    // Editor chrome fits: the save control sits left of the export control
-    // rather than on top of it.
+    // Editor chrome fits: the save control sits left of preview and "Więcej"
+    // rather than on top of them, exactly as in the node editor.
     const save = (await page.locator('header button', { hasText: /Zapisz|Zapisano/ }).boundingBox())!;
-    const download = (await page.locator('button[title^="Pobierz pliki"]').boundingBox())!;
-    expect(save.x + save.width).toBeLessThanOrEqual(download.x + 1);
+    const preview = (await page.locator('button[title^="Otwórz podgląd"]').boundingBox())!;
+    const more = (await page.locator('button[title="Więcej"]').boundingBox())!;
+    expect(save.x + save.width).toBeLessThanOrEqual(preview.x + 1);
+    expect(preview.x + preview.width).toBeLessThanOrEqual(more.x + 1);
     await expect(documentFrame(page).locator('h1')).toBeVisible();
   });
 

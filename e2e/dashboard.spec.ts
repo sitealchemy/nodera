@@ -4,6 +4,7 @@ import {
   collectPageProblems,
   documentFrame,
   selectSiteElement,
+  selectionActions,
   waitForDocumentRendered,
   waitForSiteRendered,
 } from './helpers';
@@ -246,13 +247,13 @@ test.describe('persistence', () => {
     await waitForSiteRendered(page);
 
     // Edit a leaf paragraph through the real editor, and swap an image.
-    await selectSiteElement(page, '.hero__lead');
+    await selectSiteElement(page, '.hero__lead', 'Tekst');
     await page.locator('aside textarea').fill('Cisza, drewno i nic do roboty.');
     await expect(documentFrame(page).locator('.hero__lead')).toHaveText(
       'Cisza, drewno i nic do roboty.',
     );
 
-    await selectSiteElement(page, '.hero__figure img');
+    await selectSiteElement(page, '.hero__figure img', 'Tekst');
     await page.getByRole('textbox', { name: 'Tekst alternatywny' }).fill('Polana o wschodzie');
 
     // Explicit save, with a visible state.
@@ -283,7 +284,7 @@ test.describe('persistence', () => {
 
     const lead = documentFrame(page).locator('.hero__lead');
     const original = (await lead.textContent())!.trim();
-    await selectSiteElement(page, '.hero__lead');
+    await selectSiteElement(page, '.hero__lead', 'Tekst');
     await page.locator('aside textarea').fill('Zmieniony akapit');
     await expect(lead).toHaveText('Zmieniony akapit');
 
@@ -301,10 +302,9 @@ test.describe('persistence', () => {
     await waitForSiteRendered(page);
 
     // The hero heading holds <em> and <span>. Replacing its whole text would
-    // destroy them, so the editor says so instead of offering the control.
+    // destroy them, so the editor never offers the control in the first place.
     await selectSiteElement(page, '.hero__title');
-    await expect(page.locator('aside')).toContainText('zagnieżdżone formatowanie');
-    await expect(page.locator('aside textarea')).toHaveCount(0);
+    expect(await selectionActions(page)).toEqual(['Rozmiar', 'Wygląd']);
 
     // The nested markup is still there, untouched.
     await expect(documentFrame(page).locator('.hero__title em')).toHaveText('jedna');

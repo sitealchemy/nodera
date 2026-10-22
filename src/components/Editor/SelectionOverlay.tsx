@@ -8,7 +8,6 @@ import {
   isSelectionOffscreen,
   placeNearSelection,
 } from '../../lib/overlayPlacement';
-import { NodeElement } from '../../types/document';
 
 /**
  * Screen-space overlay drawing selection and hover affordances.
@@ -18,13 +17,30 @@ import { NodeElement } from '../../types/document';
  * a hairline at 25% and a slab at 400% would both be unusable.
  */
 
+/** The minimum an element has to say about itself to be drawn and labelled. */
+export interface SelectionDescriptor {
+  id: string;
+  /** Short type badge, e.g. `h1` or `section`. */
+  tag: string;
+  /** Human-readable name shown beside the badge. */
+  label: string;
+}
+
 export interface SelectionOverlayProps {
   camera: Camera;
   /** Bounding boxes in document coordinates, or null when unknown. */
   selectedRect: Rect | null;
   hoveredRect: Rect | null;
-  selectedNode: NodeElement | null;
-  hoveredNode: NodeElement | null;
+  /**
+   * What is selected, as the overlay needs it.
+   *
+   * Deliberately not a NodeElement: the overlay draws a box, a label and the
+   * action chips, and all three editors' documents can describe themselves
+   * that much. Binding it to one document model is what forced a second,
+   * poorer overlay to exist for pages that are not node trees.
+   */
+  selected: SelectionDescriptor | null;
+  hovered: SelectionDescriptor | null;
   availableActions: ElementAction[];
   activeAction: ElementAction | null;
   onChooseAction: (action: ElementAction) => void;
@@ -46,8 +62,8 @@ export const SelectionOverlay: React.FC<SelectionOverlayProps> = ({
   camera,
   selectedRect,
   hoveredRect,
-  selectedNode,
-  hoveredNode,
+  selected,
+  hovered,
   availableActions,
   activeAction,
   onChooseAction,
@@ -71,7 +87,7 @@ export const SelectionOverlay: React.FC<SelectionOverlayProps> = ({
   // of delay.
   useLayoutEffect(() => {
     const container = containerRef.current;
-    if (!container || !selectScreen || !selectedNode) {
+    if (!container || !selectScreen || !selected) {
       setToolbarPos(null);
       setLabelPos(null);
       setOffscreen(false);
@@ -126,14 +142,14 @@ export const SelectionOverlay: React.FC<SelectionOverlayProps> = ({
     selectScreen?.y,
     selectScreen?.width,
     selectScreen?.height,
-    selectedNode?.id,
+    selected?.id,
     activeAction,
     availableActions.length,
     insets,
   ]);
 
   const showHover =
-    hoverScreen && hoveredNode && (!selectedNode || hoveredNode.id !== selectedNode.id);
+    hoverScreen && hovered && (!selected || hovered.id !== selected.id);
 
   return (
     <div ref={containerRef} className="absolute inset-0 pointer-events-none z-20 overflow-hidden">
@@ -148,13 +164,13 @@ export const SelectionOverlay: React.FC<SelectionOverlayProps> = ({
           }}
         >
           <span className="absolute -top-[18px] left-0 bg-[#A86645]/90 text-white text-[10px] font-medium px-1.5 py-[1px] rounded whitespace-nowrap">
-            {hoveredNode.name}
+            {hovered.label}
           </span>
         </div>
       )}
 
       {/* Outline follows the element wherever it is, even partly off-screen. */}
-      {selectScreen && selectedNode && (
+      {selectScreen && selected && (
         <div
           className="absolute border-2 border-[#A86645]"
           style={{
@@ -167,7 +183,7 @@ export const SelectionOverlay: React.FC<SelectionOverlayProps> = ({
       )}
 
       {/* Label — positioned independently so it can flip with the toolbar. */}
-      {selectScreen && selectedNode && !offscreen && (
+      {selectScreen && selected && !offscreen && (
         <div
           ref={labelRef}
           className="absolute flex items-center gap-1 whitespace-nowrap"
@@ -178,16 +194,16 @@ export const SelectionOverlay: React.FC<SelectionOverlayProps> = ({
           }}
         >
           <span className="bg-[#A86645] text-white text-[10px] font-mono font-semibold px-1.5 py-[2px] rounded shadow-sm">
-            {selectedNode.tag.toUpperCase()}
+            {selected.tag.toUpperCase()}
           </span>
           <span className="bg-[#292824] text-white text-[10px] px-1.5 py-[2px] rounded shadow-sm max-w-[220px] truncate">
-            {selectedNode.name}
+            {selected.label}
           </span>
         </div>
       )}
 
       {/* Action bar — only real actions, always reachable. */}
-      {selectScreen && selectedNode && !offscreen && (
+      {selectScreen && selected && !offscreen && (
         <div
           ref={toolbarRef}
           className="absolute pointer-events-auto"
@@ -212,6 +228,7 @@ export const SelectionOverlay: React.FC<SelectionOverlayProps> = ({
                   event.currentTarget.blur();
                 }}
                 title={ACTION_META[action].title}
+                aria-pressed={activeAction === action}
                 className={`px-2 py-1 rounded flex items-center gap-1 transition-colors ${
                   activeAction === action ? 'bg-[#A86645]' : 'hover:bg-white/15'
                 }`}
@@ -234,14 +251,14 @@ export const SelectionOverlay: React.FC<SelectionOverlayProps> = ({
 
       {/* Selection is entirely out of view: offer a way back rather than
           leaving tools floating with no visible object. */}
-      {selectedNode && offscreen && (
+      {selected && offscreen && (
         <div
           className="absolute pointer-events-auto"
           style={{ left: insets.left, top: insets.top }}
           onPointerDown={(e) => e.stopPropagation()}
         >
           <div className="flex items-center gap-2 bg-[#292824] text-white rounded-lg shadow-xl px-2 py-1.5 text-[11px]">
-            <span className="opacity-80 max-w-[160px] truncate">{selectedNode.name}</span>
+            <span className="opacity-80 max-w-[160px] truncate">{selected.label}</span>
             <button
               onClick={onRevealSelection}
               className="px-2 py-1 rounded bg-[#A86645] hover:bg-[#935537] flex items-center gap-1 font-medium"

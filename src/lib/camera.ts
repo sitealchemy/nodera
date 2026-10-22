@@ -63,6 +63,20 @@ export function clampZoom(zoom: number): number {
 }
 
 /** document -> screen */
+/**
+ * The camera as it is painted: pan rounded to whole pixels.
+ *
+ * Zoom maths produces fractional pan — `zoomAtPoint` keeps a point fixed, and
+ * that rarely lands on an integer. Translating the artboard by half a pixel
+ * makes the browser resample the whole page, which blurs the very thing the
+ * user is judging. Rounding at the point of use keeps the maths smooth and
+ * the picture sharp, and the artboard and its overlay stay in step because
+ * both go through here.
+ */
+export function snapCamera(camera: Camera): Camera {
+  return { ...camera, panX: Math.round(camera.panX), panY: Math.round(camera.panY) };
+}
+
 export function documentToScreen(point: Point, camera: Camera): Point {
   return {
     x: point.x * camera.zoom + camera.panX,

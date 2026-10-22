@@ -18,7 +18,8 @@ import {
   Tablet,
   Undo2,
 } from 'lucide-react';
-import { DirectionOption, PageDocument, ResponsiveScope, ViewportDevice } from '../../types/document';
+import { ResponsiveScope, ViewportDevice } from '../../types/document';
+import { UnsupportedFeatures } from '../../editor/capabilities';
 
 /**
  * Compact editor header.
@@ -28,13 +29,32 @@ import { DirectionOption, PageDocument, ResponsiveScope, ViewportDevice } from '
  * else moves into "Więcej" rather than disappearing.
  */
 
+/** Just enough of a page for the picker; both document kinds can say this. */
+export interface HeaderPage {
+  slug: string;
+  name: string;
+}
+
+export interface HeaderMenuItem {
+  icon: React.ElementType;
+  label: string;
+  hint?: string;
+  action: () => void;
+}
+
 export interface EditorHeaderProps {
   projectName: string;
-  pages: PageDocument[];
+  /** A badge beside the name, e.g. which kind of document is open. */
+  documentBadge?: string;
+  pages: HeaderPage[];
   activePageSlug: string;
   onSelectPage: (slug: string) => void;
-  directions: Record<string, DirectionOption>;
-  activeDirectionId: string;
+  /** Shown as the hint on the directions entry; omitted when there are none. */
+  directionHint?: string;
+  /** Features the open document does not support, with the reason for each. */
+  unsupported?: UnsupportedFeatures;
+  /** Entries appended to "Więcej", for tools only one document kind has. */
+  extraMenuItems?: HeaderMenuItem[];
   viewportDevice: ViewportDevice;
   onSelectViewport: (device: ViewportDevice) => void;
   responsiveScope: ResponsiveScope;
@@ -44,10 +64,10 @@ export interface EditorHeaderProps {
   onUndo: () => void;
   onRedo: () => void;
   onOpenPreview: () => void;
-  onOpenProposal: () => void;
-  onOpenPublishChecklist: () => void;
+  onOpenProposal?: () => void;
+  onOpenPublishChecklist?: () => void;
   onOpenCodeExport: () => void;
-  onOpenDirectionsView: () => void;
+  onOpenDirectionsView?: () => void;
   onBackToDashboard: () => void;
   onSave: () => void;
   saveState: 'saved' | 'dirty' | 'saving' | 'error';
@@ -81,11 +101,13 @@ const SCOPE_LABEL: Record<ResponsiveScope, string> = {
 
 export const EditorHeader: React.FC<EditorHeaderProps> = ({
   projectName,
+  documentBadge,
   pages,
   activePageSlug,
   onSelectPage,
-  directions,
-  activeDirectionId,
+  directionHint,
+  unsupported = {},
+  extraMenuItems = [],
   viewportDevice,
   onSelectViewport,
   responsiveScope,
@@ -113,7 +135,6 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
   const scopeRef = useDismissable(() => setScopeOpen(false));
 
   const activePage = pages.find((page) => page.slug === activePageSlug) ?? pages[0];
-  const activeDirection = directions[activeDirectionId];
 
   return (
     <header className="h-12 shrink-0 bg-[#FFFEFB] border-b border-[#DED9CF] px-3 flex items-center justify-between gap-3 z-40 select-none">
@@ -132,6 +153,11 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
         <span className="text-xs font-semibold text-[#292824] truncate hidden sm:block">
           {projectName}
         </span>
+        {documentBadge && (
+          <span className="text-[10px] text-[#706C65] bg-[#F6F4EF] border border-[#DED9CF] rounded px-1.5 py-0.5 shrink-0 hidden md:block">
+            {documentBadge}
+          </span>
+        )}
 
         <span className="w-px h-4 bg-[#DED9CF] mx-0.5 hidden sm:block" />
 
@@ -139,13 +165,14 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
         <div className="relative" ref={pagesRef}>
           <button
             onClick={() => setPagesOpen((open) => !open)}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg hover:bg-[#F6F4EF] text-xs font-medium text-[#292824] transition-colors"
-            title="Wybierz podstronę"
+            disabled={!!unsupported.pages}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg hover:bg-[#F6F4EF] text-xs font-medium text-[#292824] transition-colors disabled:hover:bg-transparent disabled:cursor-default"
+            title={unsupported.pages ?? 'Wybierz podstronę'}
           >
             <span className="truncate max-w-[160px]">{activePage?.name ?? 'Strona'}</span>
-            <ChevronDown className="w-3.5 h-3.5 text-[#706C65] shrink-0" />
+            {!unsupported.pages && <ChevronDown className="w-3.5 h-3.5 text-[#706C65] shrink-0" />}
           </button>
-          {pagesOpen && (
+          {pagesOpen && !unsupported.pages && (
             <div className="absolute left-0 top-full mt-1 w-60 bg-[#FFFEFB] border border-[#DED9CF] rounded-xl shadow-lg py-1 z-50">
               {pages.map((page) => (
                 <button
@@ -195,18 +222,19 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
         <div className="relative" ref={scopeRef}>
           <button
             onClick={() => setScopeOpen((open) => !open)}
-            title="Zakres edycji — gdzie zapisywana jest zmiana"
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-medium transition-colors ${
+            disabled={!!unsupported.responsiveScope}
+            title={unsupported.responsiveScope ?? 'Zakres edycji — gdzie zapisywana jest zmiana'}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-medium transition-colors disabled:opacity-45 disabled:cursor-default ${
               responsiveScope === 'all'
                 ? 'bg-[#F6F4EF] border-[#DED9CF] text-[#706C65] hover:text-[#292824]'
                 : 'bg-[#A86645]/10 border-[#A86645]/40 text-[#A86645]'
             }`}
           >
             <span className="hidden md:inline">Zakres:</span>
-            <span>{SCOPE_LABEL[responsiveScope]}</span>
-            <ChevronDown className="w-3 h-3" />
+            <span>{unsupported.responsiveScope ? 'Wszystkie ekrany' : SCOPE_LABEL[responsiveScope]}</span>
+            {!unsupported.responsiveScope && <ChevronDown className="w-3 h-3" />}
           </button>
-          {scopeOpen && (
+          {scopeOpen && !unsupported.responsiveScope && (
             <div className="absolute right-0 top-full mt-1 w-56 bg-[#FFFEFB] border border-[#DED9CF] rounded-xl shadow-lg py-1 z-50">
               {(['all', 'tablet', 'mobile'] as ResponsiveScope[]).map((scope) => (
                 <button
@@ -302,22 +330,55 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
           {moreOpen && (
             <div className="absolute right-0 top-full mt-1 w-64 bg-[#FFFEFB] border border-[#DED9CF] rounded-xl shadow-lg py-1 z-50 text-xs">
               {[
-                { icon: Compass, label: 'Kierunki projektowe', hint: activeDirection?.name, action: onOpenDirectionsView },
-                { icon: Share2, label: 'Propozycja dla klienta', action: onOpenProposal },
-                { icon: ShieldCheck, label: 'Przygotowanie do publikacji', action: onOpenPublishChecklist },
+                {
+                  icon: Compass,
+                  label: 'Kierunki projektowe',
+                  hint: directionHint,
+                  action: onOpenDirectionsView,
+                  reason: unsupported.directions,
+                },
+                {
+                  icon: Share2,
+                  label: 'Propozycja dla klienta',
+                  action: onOpenProposal,
+                  reason: unsupported.proposal,
+                },
+                {
+                  icon: ShieldCheck,
+                  label: 'Przygotowanie do publikacji',
+                  action: onOpenPublishChecklist,
+                  reason: unsupported.checklist,
+                },
                 { icon: Code, label: 'Kod i eksport', action: onOpenCodeExport },
-              ].map(({ icon: Icon, label, hint, action }) => (
+                ...extraMenuItems.map((item) => ({ ...item, reason: undefined as string | undefined })),
+              ].map(({ icon: Icon, label, hint, action, reason }) => (
+                // An entry that does not apply stays in place, visibly off and
+                // carrying its reason. Removing it would make the menu differ
+                // between document kinds for no reason the user can see.
                 <button
                   key={label}
+                  disabled={!!reason || !action}
+                  title={reason}
                   onClick={() => {
-                    action();
+                    action?.();
                     setMoreOpen(false);
                   }}
-                  className="w-full px-3 py-2 flex items-center gap-2.5 hover:bg-[#F6F4EF] text-left text-[#292824]"
+                  className="w-full px-3 py-2 flex items-start gap-2.5 hover:bg-[#F6F4EF] text-left text-[#292824] disabled:hover:bg-transparent disabled:cursor-default"
                 >
-                  <Icon className="w-3.5 h-3.5 text-[#A86645] shrink-0" />
-                  <span className="flex-1">{label}</span>
-                  {hint && <span className="text-[10px] text-[#706C65] truncate max-w-[80px]">{hint}</span>}
+                  <Icon
+                    className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${reason ? 'text-[#706C65]' : 'text-[#A86645]'}`}
+                  />
+                  <span className="flex-1 min-w-0">
+                    <span className={reason ? 'text-[#706C65]' : undefined}>{label}</span>
+                    {reason && (
+                      <span className="block text-[10px] text-[#706C65] leading-snug mt-0.5">
+                        {reason}
+                      </span>
+                    )}
+                  </span>
+                  {hint && !reason && (
+                    <span className="text-[10px] text-[#706C65] truncate max-w-[80px]">{hint}</span>
+                  )}
                 </button>
               ))}
             </div>

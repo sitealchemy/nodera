@@ -7,6 +7,7 @@ import {
   fitWidth,
   resetZoom,
   screenToDocument,
+  snapCamera,
   zoomByFactor,
 } from '../../lib/camera';
 import { panToCentre } from '../../lib/overlayPlacement';
@@ -16,6 +17,7 @@ import { DocumentFrame } from '../../render/DocumentFrame';
 import { NODE_ID_ATTRIBUTE } from '../../render/renderNode';
 import { VIEWPORT_WIDTHS } from '../../render/resolveStyles';
 import { useCanvasGestures } from '../../hooks/useCanvasGestures';
+import { CanvasControls } from './CanvasControls';
 import { SelectionOverlay } from './SelectionOverlay';
 
 /**
@@ -266,6 +268,9 @@ export const CanvasViewport: React.FC<CanvasViewportProps> = ({
   const selectedNode = selectedElementId ? findNode(root, selectedElementId) : null;
   const hoveredNode = hoveredId ? findNode(root, hoveredId) : null;
 
+  // What the artboard and its overlay are both drawn with.
+  const painted = snapCamera(camera);
+
   /** Brings an off-screen selection back into view without changing zoom. */
   const handleRevealSelection = useCallback(() => {
     if (!selectedRect) return;
@@ -296,7 +301,7 @@ export const CanvasViewport: React.FC<CanvasViewportProps> = ({
             transformOrigin: '0 0',
             // Matches `screen = document * zoom + pan` exactly — translate is
             // written first so it is applied in unscaled screen pixels.
-            transform: `translate(${camera.panX}px, ${camera.panY}px) scale(${camera.zoom})`,
+            transform: `translate(${painted.panX}px, ${painted.panY}px) scale(${painted.zoom})`,
             willChange: 'transform',
           }}
         >
@@ -313,11 +318,11 @@ export const CanvasViewport: React.FC<CanvasViewportProps> = ({
         </div>
 
         <SelectionOverlay
-          camera={camera}
+          camera={painted}
           selectedRect={selectedRect}
           hoveredRect={selectionEnabled ? hoveredRect : null}
-          selectedNode={selectedNode}
-          hoveredNode={hoveredNode}
+          selected={selectedNode && { id: selectedNode.id, tag: selectedNode.tag, label: selectedNode.name }}
+          hovered={hoveredNode && { id: hoveredNode.id, tag: hoveredNode.tag, label: hoveredNode.name }}
           availableActions={selectedNode ? actionsFor(selectedNode) : []}
           activeAction={activeAction}
           onChooseAction={(action) => onChooseAction(action === activeAction ? null : action)}
@@ -331,61 +336,17 @@ export const CanvasViewport: React.FC<CanvasViewportProps> = ({
         />
       </div>
 
-      {/* Floating canvas controls */}
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 bg-[#FFFEFB]/95 backdrop-blur border border-[#DED9CF] rounded-xl shadow-md px-1.5 py-1 text-xs">
-        <button
-          onClick={onToggleSelectMode}
-          title="Tryb wybierania (lub przytrzymaj Shift)"
-          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg font-medium transition-colors ${
-            selectMode ? 'bg-[#A86645] text-white' : 'text-[#706C65] hover:bg-[#F6F4EF]'
-          }`}
-        >
-          <MousePointer className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">Wybierz</span>
-        </button>
-        <button
-          onClick={onToggleHandTool}
-          title="Narzędzie dłoni (lub przytrzymaj spację)"
-          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg font-medium transition-colors ${
-            handTool ? 'bg-[#A86645] text-white' : 'text-[#706C65] hover:bg-[#F6F4EF]'
-          }`}
-        >
-          <Hand className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">Dłoń</span>
-        </button>
-
-        <span className="w-px h-4 bg-[#DED9CF] mx-0.5" />
-
-        <button
-          onClick={() => zoomFromCentre(1 / 1.2)}
-          className="p-1.5 rounded-lg text-[#706C65] hover:bg-[#F6F4EF]"
-          title="Pomniejsz"
-        >
-          <Minus className="w-3.5 h-3.5" />
-        </button>
-        <button
-          onClick={handleResetZoom}
-          className="font-mono text-[11px] w-12 text-center font-semibold text-[#292824] hover:bg-[#F6F4EF] rounded py-1"
-          title="Ustaw 100%"
-        >
-          {Math.round(camera.zoom * 100)}%
-        </button>
-        <button
-          onClick={() => zoomFromCentre(1.2)}
-          className="p-1.5 rounded-lg text-[#706C65] hover:bg-[#F6F4EF]"
-          title="Powiększ"
-        >
-          <Plus className="w-3.5 h-3.5" />
-        </button>
-        <button
-          onClick={handleFitWidth}
-          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[#706C65] hover:bg-[#F6F4EF] font-medium"
-          title="Dopasuj szerokość"
-        >
-          <Maximize2 className="w-3.5 h-3.5" />
-          <span className="hidden md:inline">Dopasuj</span>
-        </button>
-      </div>
+      <CanvasControls
+        zoom={camera.zoom}
+        selectMode={selectMode}
+        onToggleSelectMode={onToggleSelectMode}
+        handTool={handTool}
+        onToggleHandTool={onToggleHandTool}
+        onZoomOut={() => zoomFromCentre(1 / 1.2)}
+        onZoomIn={() => zoomFromCentre(1.2)}
+        onResetZoom={handleResetZoom}
+        onFitWidth={handleFitWidth}
+      />
     </div>
   );
 };

@@ -301,7 +301,12 @@ export async function waitForFrameResources(page: Page): Promise<void> {
  * were just measured. An element off-camera is a mistake in the test, so it
  * says so instead of clicking somewhere arbitrary.
  */
-export async function selectSiteElement(page: Page, selector: string): Promise<void> {
+export async function selectSiteElement(
+  page: Page,
+  selector: string,
+  /** The contextual action to open afterwards, as a user would. */
+  action?: 'Tekst' | 'Rozmiar' | 'Wygląd' | 'Położenie',
+): Promise<void> {
   const target = documentFrame(page).locator(selector).first();
   const box = await target.boundingBox();
   if (!box) throw new Error(`Element ${selector} has no box; is it visible?`);
@@ -324,7 +329,29 @@ export async function selectSiteElement(page: Page, selector: string): Promise<v
   await page.keyboard.down('Shift');
   await page.mouse.click(x, y);
   await page.keyboard.up('Shift');
-  await expect(page.locator('aside')).toBeVisible();
+  // The selection toolbar is the proof the click landed on an element.
+  await expect(page.locator('button[title^="Odznacz"]').first()).toBeVisible();
+
+  if (action) {
+    // The open action carries across selections, as it does in the node
+    // editor. Clicking an already-armed chip would close the panel, so this
+    // opens it only when it is not already the one showing.
+    const chip = page.getByRole('button', { name: action, exact: true });
+    if ((await chip.getAttribute('aria-pressed')) !== 'true') await chip.click();
+    await expect(page.locator('aside').last()).toBeVisible();
+  }
+}
+
+/** The contextual action chips offered for the current selection. */
+export async function selectionActions(page: Page): Promise<string[]> {
+  const chips = ['Tekst', 'Rozmiar', 'Wygląd', 'Położenie'];
+  const present: string[] = [];
+  for (const chip of chips) {
+    if (await page.getByRole('button', { name: chip, exact: true }).isVisible().catch(() => false)) {
+      present.push(chip);
+    }
+  }
+  return present;
 }
 
 /** Reads the stored site document of the most recently updated project. */

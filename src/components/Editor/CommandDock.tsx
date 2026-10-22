@@ -78,6 +78,13 @@ export interface CommandDockProps {
   feedback: CommandFeedback | null;
   onUndoLastAction: () => void;
   onDismissFeedback: () => void;
+  /**
+   * Why commands do not apply to the open document, when they do not.
+   *
+   * The dock stays where it is and says so, rather than disappearing: a tool
+   * that is missing on one document and present on another reads as a fault.
+   */
+  unsupportedReason?: string;
 }
 
 const SCOPE_LABEL: Record<ResponsiveScope, string> = {
@@ -95,6 +102,7 @@ export const CommandDock: React.FC<CommandDockProps> = ({
   feedback,
   onUndoLastAction,
   onDismissFeedback,
+  unsupportedReason,
 }) => {
   const [expanded, setExpanded] = useState(false);
   const [prompt, setPrompt] = useState('');
@@ -133,9 +141,12 @@ export const CommandDock: React.FC<CommandDockProps> = ({
     }
   };
 
-  if (!expanded) {
+  if (!expanded || unsupportedReason) {
     return (
-      <div className="absolute bottom-4 right-4 z-30 flex flex-col items-end gap-2">
+      <div
+        data-command-dock
+        className="absolute bottom-4 right-4 z-30 flex flex-col items-end gap-2"
+      >
         {feedback && (
           <div
             className={`flex items-center gap-2 border rounded-xl shadow-md px-3 py-2 text-[11px] max-w-sm ${FEEDBACK_STYLE[feedback.kind].tone}`}
@@ -155,10 +166,14 @@ export const CommandDock: React.FC<CommandDockProps> = ({
         )}
         <button
           onClick={() => setExpanded(true)}
-          className="flex items-center gap-2 bg-[#FFFEFB] border border-[#DED9CF] rounded-xl shadow-md px-3.5 py-2.5 text-xs text-[#706C65] hover:text-[#292824] hover:border-[#A86645]/50 transition-colors"
+          disabled={!!unsupportedReason}
+          title={unsupportedReason}
+          className="flex items-center gap-2 bg-[#FFFEFB] border border-[#DED9CF] rounded-xl shadow-md px-3.5 py-2.5 text-xs text-[#706C65] hover:text-[#292824] hover:border-[#A86645]/50 transition-colors disabled:opacity-50 disabled:hover:text-[#706C65] disabled:hover:border-[#DED9CF] disabled:cursor-default"
         >
-          <Sparkles className="w-3.5 h-3.5 text-[#A86645]" />
-          <span>Co chcesz zmienić?</span>
+          <Sparkles
+            className={`w-3.5 h-3.5 ${unsupportedReason ? 'text-[#706C65]' : 'text-[#A86645]'}`}
+          />
+          <span>{unsupportedReason ? 'Polecenia niedostępne dla tej strony' : 'Co chcesz zmienić?'}</span>
         </button>
       </div>
     );

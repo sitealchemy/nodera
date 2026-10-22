@@ -11,7 +11,7 @@ import {
 } from './types/document';
 import { StorageService } from './services/storage';
 import { AIAdapter, AICommandContext, AIExecutionResult } from './services/aiAdapter';
-import { INITIAL_SPLOT_PROJECT } from './data/splotDemo';
+import { CERAMIC_IMAGES, INITIAL_SPLOT_PROJECT } from './data/splotDemo';
 import { Camera, IDENTITY_CAMERA } from './lib/camera';
 import { ElementAction, findNode, navigateFrom, nodeExists } from './lib/documentTree';
 import {
@@ -26,7 +26,7 @@ import { LinkTarget } from './lib/links';
 import { resolveOpticalOffset } from './render/resolveStyles';
 
 import { EditorHeader } from './components/Editor/EditorHeader';
-import { DrawerId, DrawerRail } from './components/Editor/DrawerRail';
+import { DrawerId, DrawerRail, TreeEntry } from './components/Editor/DrawerRail';
 import { CanvasViewport } from './components/Editor/CanvasViewport';
 import { ActionInspector } from './components/Editor/ActionInspector';
 import { CommandDock, CommandFeedback } from './components/Editor/CommandDock';
@@ -137,6 +137,23 @@ export const App: React.FC<EditorAppProps> = ({
   const activeDirection = project.directions[project.activeDirectionId];
   const pages = useMemo(() => Object.values(activeDirection.pages), [activeDirection]);
   const activePage = activeDirection.pages[project.activePageSlug] ?? pages[0];
+
+  // The drawer rail describes any document through the same small shape, so
+  // the node tree is adapted here rather than the panel knowing about nodes.
+  const treeEntries = useMemo((): TreeEntry => {
+    const toEntry = (node: NodeElement): TreeEntry => ({
+      id: node.id,
+      tag: node.tag,
+      label: node.name,
+      children: node.children?.map(toEntry),
+    });
+    return toEntry(activePage.root);
+  }, [activePage.root]);
+
+  const demoAssets = useMemo(
+    () => Object.entries(CERAMIC_IMAGES).map(([name, url]) => ({ name, url })),
+    [],
+  );
   const selectedNode = selectedElementId ? findNode(activePage.root, selectedElementId) : null;
   const pageSlugs = useMemo(() => pages.map((page) => page.slug), [pages]);
 
@@ -543,8 +560,7 @@ export const App: React.FC<EditorAppProps> = ({
         pages={pages}
         activePageSlug={project.activePageSlug}
         onSelectPage={handleSelectPage}
-        directions={project.directions}
-        activeDirectionId={project.activeDirectionId}
+        directionHint={project.directions[project.activeDirectionId]?.name}
         viewportDevice={viewportDevice}
         onSelectViewport={setViewportDevice}
         responsiveScope={responsiveScope}
@@ -575,9 +591,10 @@ export const App: React.FC<EditorAppProps> = ({
           directions={project.directions}
           activeDirectionId={project.activeDirectionId}
           onSelectDirection={handleSelectDirection}
-          rootElement={activePage.root}
+          tree={treeEntries}
           selectedElementId={selectedElementId}
           onSelectElement={setSelectedElementId}
+          assets={demoAssets}
           tokens={activeTokens}
           onUpdateTokens={handleUpdateTokens}
           responsiveScope={responsiveScope}

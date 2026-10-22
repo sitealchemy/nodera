@@ -21,9 +21,6 @@ import { waitForFrameResources, waitForSiteRendered } from './helpers';
 const SHOTS = 'e2e-screenshots/fidelity';
 const PROMPT = 'Strona dla trzech domków w lesie na Dolnym Śląsku — zdjęcia, ceny, kontakt.';
 
-/** The editor's own header, which sits above the canvas. */
-const HEADER_HEIGHT = 48;
-
 /**
  * How much difference is accepted, as a share of compared pixels.
  *
@@ -91,55 +88,61 @@ async function shootOriginal(page: Page, width: number): Promise<Buffer> {
 /**
  * Screenshots the same page as the editor renders it, at the same width.
  *
- * Camera is driven through the real controls: 100% zoom, then a deliberately
- * over-long hand drag, which the pan clamp resolves to exactly (0, 0). That is
- * how the artboard is aligned to the canvas corner without reaching into the
- * app's state.
+ * No panning: the camera is left wherever "100%" put it, the window is grown
+ * until the whole artboard fits inside it, and the capture is clipped to the
+ * artboard's measured box. Driving the camera to a particular corner first
+ * was incidental to the comparison and quietly depended on the canvas being
+ * full-bleed, which it is not once the drawer rail is beside it.
  */
 async function shootNodera(page: Page, width: number, button: string): Promise<Buffer> {
   await page.locator(`button[title="${button}"]`).click();
+
+  // Give the canvas room to spare before framing, so that "fit" and then
+  // "100%" leave the artboard wholly inside it. The canvas clips what hangs
+  // past its edge, and a clip taken over the clipped part captures the chrome
+  // behind it — which is exactly how a 24px strip of the drawer rail once got
+  // compared against the page and read as a conversion fault.
+  await page.setViewportSize({ width: width + 600, height: 900 });
+  await page.locator('button[title="Dopasuj szerokość"]').click();
   await page.locator('button[title="Ustaw 100%"]').click();
 
-  // Make the whole artboard fit, so nothing is clipped by the canvas.
-  const contentHeight = await page.evaluate(() => {
-    const frame = document.querySelector('iframe[title="Podgląd strony"]') as HTMLIFrameElement;
-    return parseFloat(frame.style.height);
-  });
+  const frame = page.locator('iframe[title="Podgląd strony"]');
+  const first = (await frame.boundingBox())!;
   await page.setViewportSize({
-    width: width + 160,
-    height: Math.ceil(contentHeight) + HEADER_HEIGHT + 60,
+    width: width + 600,
+    height: Math.ceil(first.y + first.height) + 80,
   });
-
-  await page.locator('button[title^="Narzędzie dłoni"]').click();
-  const canvas = page.locator('div[style*="cursor"]').first();
-  const view = (await canvas.boundingBox())!;
-  await page.mouse.move(view.x + view.width - 30, view.y + view.height - 30);
-  await page.mouse.down();
-  await page.mouse.move(view.x - 4000, view.y - 9000, { steps: 4 });
-  await page.mouse.up();
 
   await waitForFrameResources(page);
 
-  // The canvas overlays — zoom dock and selection outline — are editor chrome
-  // drawn on top of the artboard. They are hidden for the capture only; no
-  // assertion depends on them being absent.
+  // The canvas overlays — zoom dock, command dock and selection outline — are
+  // editor chrome drawn on top of the artboard. They are hidden for the
+  // capture only; no assertion depends on them being absent.
   await page.evaluate(() => {
-    const fit = [...document.querySelectorAll('button')].find(
-      (button) => button.title === 'Dopasuj szerokość',
-    );
-    const dock = fit?.parentElement as HTMLElement | undefined;
-    if (dock) dock.style.setProperty('display', 'none', 'important');
-    document
-      .querySelectorAll<HTMLElement>('div.pointer-events-none.z-20')
-      .forEach((overlay) => overlay.style.setProperty('display', 'none', 'important'));
+    const hide = (element: Element | null | undefined) =>
+      (element as HTMLElement | undefined)?.style.setProperty('display', 'none', 'important');
+    hide(document.querySelector('[data-canvas-controls]'));
+    hide(document.querySelector('[data-command-dock]'));
+    document.querySelectorAll('div.pointer-events-none.z-20').forEach(hide);
   });
 
-  const frame = page.locator('iframe[title="Podgląd strony"]');
   const box = (await frame.boundingBox())!;
-  // The artboard really is at the canvas corner and unscaled.
-  expect(Math.round(box.x)).toBe(Math.round(view.x));
-  expect(Math.round(box.y)).toBe(Math.round(view.y));
+  const canvas = (await page.locator('div[style*="cursor"]').first().boundingBox())!;
+
+  // Unscaled, and not clipped by the canvas on any side.
   expect(Math.round(box.width)).toBe(width);
+  expect(Math.round(box.x), 'artboard is clipped on the left').toBeGreaterThanOrEqual(
+    Math.round(canvas.x),
+  );
+  expect(Math.round(box.y), 'artboard is clipped at the top').toBeGreaterThanOrEqual(
+    Math.round(canvas.y),
+  );
+  expect(Math.ceil(box.x + box.width), 'artboard is clipped on the right').toBeLessThanOrEqual(
+    Math.ceil(canvas.x + canvas.width),
+  );
+  expect(Math.ceil(box.y + box.height), 'artboard is clipped at the bottom').toBeLessThanOrEqual(
+    Math.ceil(canvas.y + canvas.height),
+  );
 
   return page.screenshot({
     clip: { x: box.x, y: box.y, width: box.width, height: box.height },

@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Hand, Maximize2, MousePointer, Minus, Plus } from 'lucide-react';
 import {
   Camera,
   Rect,
@@ -8,9 +7,14 @@ import {
   fitWidth,
   resetZoom,
   screenToDocument,
+  snapCamera,
   zoomByFactor,
 } from '../lib/camera';
+import { panToCentre } from '../lib/overlayPlacement';
 import { useCanvasGestures } from '../hooks/useCanvasGestures';
+import { ElementAction } from '../lib/documentTree';
+import { CanvasControls } from '../components/Editor/CanvasControls';
+import { SelectionDescriptor, SelectionOverlay } from '../components/Editor/SelectionOverlay';
 import { NODE_ID_ATTRIBUTE, SiteDocument } from './types';
 import { RenderedSite, releaseRender, renderSite } from './renderSite';
 import { parseHtml, serialise } from './ingest';
@@ -38,6 +42,12 @@ export interface SiteCanvasProps {
   onToggleSelectMode: () => void;
   handTool: boolean;
   onToggleHandTool: () => void;
+  /** Describes an element for the overlay label; supplied by the editor. */
+  describe: (nodeId: string) => SelectionDescriptor | null;
+  /** Which edit actions the selected element offers. */
+  availableActions: ElementAction[];
+  activeAction: ElementAction | null;
+  onChooseAction: (action: ElementAction | null) => void;
 }
 
 export const SiteCanvas: React.FC<SiteCanvasProps> = ({
@@ -51,6 +61,10 @@ export const SiteCanvas: React.FC<SiteCanvasProps> = ({
   onToggleSelectMode,
   handTool,
   onToggleHandTool,
+  describe,
+  availableActions,
+  activeAction,
+  onChooseAction,
 }) => {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
@@ -59,6 +73,7 @@ export const SiteCanvas: React.FC<SiteCanvasProps> = ({
   const [contentHeight, setContentHeight] = useState(1200);
   const [shiftHeld, setShiftHeld] = useState(false);
   const [hoveredRect, setHoveredRect] = useState<Rect | null>(null);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [selectedRect, setSelectedRect] = useState<Rect | null>(null);
 
   const documentWidth = PREVIEW_WIDTHS[width];
@@ -177,14 +192,17 @@ export const SiteCanvas: React.FC<SiteCanvasProps> = ({
     (event: React.PointerEvent) => {
       if (!(selectionEnabled || event.shiftKey)) {
         if (hoveredRect) setHoveredRect(null);
+        if (hoveredId) setHoveredId(null);
         return;
       }
       const rect = viewportRef.current?.getBoundingClientRect();
       if (!rect) return;
       const screen = clientToScreen(event.clientX, event.clientY, rect);
-      setHoveredRect(rectForNode(nodeIdAt(screen.x, screen.y)));
+      const id = nodeIdAt(screen.x, screen.y);
+      setHoveredId(id);
+      setHoveredRect(rectForNode(id));
     },
-    [selectionEnabled, hoveredRect, nodeIdAt, rectForNode],
+    [selectionEnabled, hoveredRect, hoveredId, nodeIdAt, rectForNode],
   );
 
   const handlePointerDown = useCallback(
@@ -214,8 +232,15 @@ export const SiteCanvas: React.FC<SiteCanvasProps> = ({
     onCameraChange(fitWidth(size, documentWidth));
   }, [documentWidth, viewportSize, onCameraChange]);
 
-  const selectScreen = selectedRect ? documentRectToScreen(selectedRect, camera) : null;
-  const hoverScreen = hoveredRect ? documentRectToScreen(hoveredRect, camera) : null;
+  /** Brings an off-screen selection back into view without changing zoom. */
+  const handleRevealSelection = useCallback(() => {
+    if (!selectedRect) return;
+    const size = viewportSize();
+    onCameraChange({ ...camera, ...panToCentre(selectedRect, size, camera.zoom) });
+  }, [selectedRect, viewportSize, camera, onCameraChange]);
+
+  // What the artboard and its overlay are both drawn with.
+  const painted = snapCamera(camera);
 
   return (
     <div className="relative flex-1 min-h-0 w-full bg-[#ECE8DF] overflow-hidden">
@@ -225,7 +250,10 @@ export const SiteCanvas: React.FC<SiteCanvasProps> = ({
         style={{ cursor: selectionEnabled ? 'crosshair' : cursor, touchAction: 'none' }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
-        onPointerLeave={() => setHoveredRect(null)}
+        onPointerLeave={() => {
+          setHoveredRect(null);
+          setHoveredId(null);
+        }}
         onAuxClick={(event) => event.preventDefault()}
         onContextMenu={(event) => event.preventDefault()}
       >
@@ -236,7 +264,7 @@ export const SiteCanvas: React.FC<SiteCanvasProps> = ({
             left: 0,
             width: documentWidth,
             transformOrigin: '0 0',
-            transform: `translate(${camera.panX}px, ${camera.panY}px) scale(${camera.zoom})`,
+            transform: `translate(${painted.panX}px, ${painted.panY}px) scale(${painted.zoom})`,
             willChange: 'transform',
           }}
         >
@@ -265,91 +293,42 @@ export const SiteCanvas: React.FC<SiteCanvasProps> = ({
           </div>
         </div>
 
-        {/* Selection overlay, in screen space: constant stroke at any zoom. */}
-        <div className="absolute inset-0 pointer-events-none z-20 overflow-hidden">
-          {hoverScreen && (!selectScreen || hoverScreen.y !== selectScreen.y) && (
-            <div
-              className="absolute border border-[#A86645]/70"
-              style={{
-                left: hoverScreen.x,
-                top: hoverScreen.y,
-                width: hoverScreen.width,
-                height: hoverScreen.height,
-              }}
-            />
-          )}
-          {selectScreen && (
-            <div
-              className="absolute border-2 border-[#A86645]"
-              style={{
-                left: selectScreen.x,
-                top: selectScreen.y,
-                width: selectScreen.width,
-                height: selectScreen.height,
-              }}
-            />
-          )}
-        </div>
+        <SelectionOverlay
+          camera={painted}
+          selectedRect={selectedRect}
+          hoveredRect={selectionEnabled ? hoveredRect : null}
+          selected={selectedId ? describe(selectedId) : null}
+          hovered={hoveredId ? describe(hoveredId) : null}
+          availableActions={availableActions}
+          activeAction={activeAction}
+          onChooseAction={(action) => onChooseAction(action === activeAction ? null : action)}
+          onClearSelection={() => {
+            onChooseAction(null);
+            onSelect(null);
+          }}
+          onRevealSelection={handleRevealSelection}
+          // Keep tools clear of the floating zoom bar and the command dock.
+          insets={{ top: 8, right: 8, bottom: 96, left: 8 }}
+        />
       </div>
 
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 bg-[#FFFEFB]/95 backdrop-blur border border-[#DED9CF] rounded-xl shadow-md px-1.5 py-1 text-xs">
-        <button
-          onClick={onToggleSelectMode}
-          title="Tryb wybierania (lub przytrzymaj Shift)"
-          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg font-medium transition-colors ${
-            selectMode ? 'bg-[#A86645] text-white' : 'text-[#706C65] hover:bg-[#F6F4EF]'
-          }`}
-        >
-          <MousePointer className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">Wybierz</span>
-        </button>
-        <button
-          onClick={onToggleHandTool}
-          title="Narzędzie dłoni (lub przytrzymaj spację)"
-          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg font-medium transition-colors ${
-            handTool ? 'bg-[#A86645] text-white' : 'text-[#706C65] hover:bg-[#F6F4EF]'
-          }`}
-        >
-          <Hand className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">Dłoń</span>
-        </button>
-        <span className="w-px h-4 bg-[#DED9CF] mx-0.5" />
-        <button
-          onClick={() => {
-            const size = viewportSize();
-            onCameraChange(zoomByFactor(camera, 1 / 1.2, { x: size.width / 2, y: size.height / 2 }));
-          }}
-          className="p-1.5 rounded-lg text-[#706C65] hover:bg-[#F6F4EF]"
-          title="Pomniejsz"
-        >
-          <Minus className="w-3.5 h-3.5" />
-        </button>
-        <button
-          onClick={() => onCameraChange(resetZoom(camera, viewportSize()))}
-          className="font-mono text-[11px] w-12 text-center font-semibold text-[#292824] hover:bg-[#F6F4EF] rounded py-1"
-          title="Ustaw 100%"
-        >
-          {Math.round(camera.zoom * 100)}%
-        </button>
-        <button
-          onClick={() => {
-            const size = viewportSize();
-            onCameraChange(zoomByFactor(camera, 1.2, { x: size.width / 2, y: size.height / 2 }));
-          }}
-          className="p-1.5 rounded-lg text-[#706C65] hover:bg-[#F6F4EF]"
-          title="Powiększ"
-        >
-          <Plus className="w-3.5 h-3.5" />
-        </button>
-        <button
-          onClick={() => onCameraChange(fitWidth(viewportSize(), documentWidth))}
-          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[#706C65] hover:bg-[#F6F4EF] font-medium"
-          title="Dopasuj szerokość"
-        >
-          <Maximize2 className="w-3.5 h-3.5" />
-          <span className="hidden md:inline">Dopasuj</span>
-        </button>
-      </div>
+      <CanvasControls
+        zoom={camera.zoom}
+        selectMode={selectMode}
+        onToggleSelectMode={onToggleSelectMode}
+        handTool={handTool}
+        onToggleHandTool={onToggleHandTool}
+        onZoomOut={() => {
+          const size = viewportSize();
+          onCameraChange(zoomByFactor(camera, 1 / 1.2, { x: size.width / 2, y: size.height / 2 }));
+        }}
+        onZoomIn={() => {
+          const size = viewportSize();
+          onCameraChange(zoomByFactor(camera, 1.2, { x: size.width / 2, y: size.height / 2 }));
+        }}
+        onResetZoom={() => onCameraChange(resetZoom(camera, viewportSize()))}
+        onFitWidth={() => onCameraChange(fitWidth(viewportSize(), documentWidth))}
+      />
     </div>
   );
 };

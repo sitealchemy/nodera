@@ -1,14 +1,8 @@
 import React from 'react';
 import { Compass, FileText, FolderTree, Image as ImageIcon, Palette, X } from 'lucide-react';
-import {
-  DesignTokens,
-  DirectionOption,
-  NodeElement,
-  PageDocument,
-  ResponsiveScope,
-} from '../../types/document';
-import { CERAMIC_IMAGES } from '../../data/splotDemo';
+import { DesignTokens, DirectionOption, ResponsiveScope } from '../../types/document';
 import { SCOPE_NAME } from '../../services/scopeCapability';
+import { UnsupportedFeatures } from '../../editor/capabilities';
 
 /**
  * Edge rail plus a single drawer.
@@ -20,28 +14,59 @@ import { SCOPE_NAME } from '../../services/scopeCapability';
 
 export type DrawerId = 'pages' | 'assets' | 'directions' | 'tree' | 'styles';
 
+/**
+ * One entry of the structure tree.
+ *
+ * The drawer only ever needed an id, a type badge, a name and children. Taking
+ * a `NodeElement` instead is what kept the structure panel out of reach for
+ * documents that are not node trees.
+ */
+export interface TreeEntry {
+  id: string;
+  tag: string;
+  label: string;
+  children?: TreeEntry[];
+}
+
+export interface DrawerAsset {
+  name: string;
+  url: string;
+}
+
 export interface DrawerRailProps {
   openDrawer: DrawerId | null;
   onToggleDrawer: (drawer: DrawerId) => void;
   onCloseDrawer: () => void;
 
-  pages: PageDocument[];
+  pages: { slug: string; name: string }[];
   activePageSlug: string;
   onSelectPage: (slug: string) => void;
 
-  directions: Record<string, DirectionOption>;
-  activeDirectionId: string;
-  onSelectDirection: (id: string) => void;
+  directions?: Record<string, DirectionOption>;
+  activeDirectionId?: string;
+  onSelectDirection?: (id: string) => void;
 
-  rootElement: NodeElement;
+  tree: TreeEntry | null;
   selectedElementId: string | null;
   onSelectElement: (id: string) => void;
 
-  tokens: DesignTokens;
-  onUpdateTokens: (delta: Partial<DesignTokens>) => void;
+  assets: DrawerAsset[];
+
+  tokens?: DesignTokens;
+  onUpdateTokens?: (delta: Partial<DesignTokens>) => void;
   /** Shown so the token control cannot imply a locality it does not have. */
   responsiveScope: ResponsiveScope;
+
+  /** Features the open document does not support, with the reason for each. */
+  unsupported?: UnsupportedFeatures;
 }
+
+/** Which capability, if any, each drawer depends on. */
+const DRAWER_FEATURE: Partial<Record<DrawerId, keyof UnsupportedFeatures>> = {
+  pages: 'pages',
+  directions: 'directions',
+  styles: 'tokens',
+};
 
 const RAIL_ITEMS: { id: DrawerId; icon: React.ElementType; label: string }[] = [
   { id: 'pages', icon: FileText, label: 'Podstrony' },
@@ -69,19 +94,21 @@ export const DrawerRail: React.FC<DrawerRailProps> = ({
   directions,
   activeDirectionId,
   onSelectDirection,
-  rootElement,
+  tree,
   selectedElementId,
   onSelectElement,
+  assets,
   tokens,
   onUpdateTokens,
   responsiveScope,
+  unsupported = {},
 }) => {
   // Global tokens are a property of the direction, not of a breakpoint. With a
   // local scope selected the control would otherwise look like a local edit
   // while changing every screen, so it says plainly what it does.
   const tokensAreShared = true;
   const scopeMismatch = responsiveScope !== 'all' && tokensAreShared;
-  const renderTree = (node: NodeElement, depth = 0): React.ReactNode => {
+  const renderTree = (node: TreeEntry, depth = 0): React.ReactNode => {
     const isSelected = selectedElementId === node.id;
     return (
       <div key={node.id}>
@@ -99,7 +126,7 @@ export const DrawerRail: React.FC<DrawerRailProps> = ({
           >
             {node.tag}
           </span>
-          <span className="truncate">{node.name}</span>
+          <span className="truncate">{node.label}</span>
         </button>
         {node.children?.map((child) => renderTree(child, depth + 1))}
       </div>
@@ -110,21 +137,28 @@ export const DrawerRail: React.FC<DrawerRailProps> = ({
     <>
       {/* Rail */}
       <div className="w-12 shrink-0 bg-[#FFFEFB] border-r border-[#DED9CF] flex flex-col items-center py-2 gap-1 z-30">
-        {RAIL_ITEMS.map(({ id, icon: Icon, label }) => (
-          <button
-            key={id}
-            onClick={() => onToggleDrawer(id)}
-            title={label}
-            aria-pressed={openDrawer === id}
-            className={`p-2 rounded-lg transition-colors ${
-              openDrawer === id
-                ? 'bg-[#A86645] text-white'
-                : 'text-[#706C65] hover:text-[#292824] hover:bg-[#F6F4EF]'
-            }`}
-          >
-            <Icon className="w-4 h-4" />
-          </button>
-        ))}
+        {RAIL_ITEMS.map(({ id, icon: Icon, label }) => {
+          const feature = DRAWER_FEATURE[id];
+          const reason = feature ? unsupported[feature] : undefined;
+          return (
+            <button
+              key={id}
+              onClick={() => onToggleDrawer(id)}
+              disabled={!!reason}
+              // The rail keeps the same five tools for every document, and a
+              // tool that does not apply says why instead of disappearing.
+              title={reason ? `${label} — ${reason}` : label}
+              aria-pressed={openDrawer === id}
+              className={`p-2 rounded-lg transition-colors disabled:opacity-35 disabled:cursor-default disabled:hover:bg-transparent ${
+                openDrawer === id
+                  ? 'bg-[#A86645] text-white'
+                  : 'text-[#706C65] hover:text-[#292824] hover:bg-[#F6F4EF]'
+              }`}
+            >
+              <Icon className="w-4 h-4" />
+            </button>
+          );
+        })}
       </div>
 
       {/* Drawer */}
@@ -165,7 +199,7 @@ export const DrawerRail: React.FC<DrawerRailProps> = ({
 
             {openDrawer === 'assets' && (
               <div className="grid grid-cols-2 gap-2">
-                {Object.entries(CERAMIC_IMAGES).map(([name, url]) => (
+                {assets.map(({ name, url }) => (
                   <div
                     key={name}
                     className="relative group rounded-lg overflow-hidden border border-[#DED9CF] aspect-video"
@@ -181,12 +215,12 @@ export const DrawerRail: React.FC<DrawerRailProps> = ({
 
             {openDrawer === 'directions' && (
               <div className="space-y-2">
-                {Object.values(directions).map((dir) => {
+                {Object.values(directions ?? {}).map((dir) => {
                   const isActive = dir.id === activeDirectionId;
                   return (
                     <button
                       key={dir.id}
-                      onClick={() => onSelectDirection(dir.id)}
+                      onClick={() => onSelectDirection?.(dir.id)}
                       className={`w-full p-3 rounded-xl border text-left transition-all ${
                         isActive
                           ? 'bg-[#FFFEFB] border-[#A86645] ring-1 ring-[#A86645]/40'
@@ -208,9 +242,16 @@ export const DrawerRail: React.FC<DrawerRailProps> = ({
               </div>
             )}
 
-            {openDrawer === 'tree' && <div className="-mx-1">{renderTree(rootElement)}</div>}
+            {openDrawer === 'tree' &&
+              (tree ? (
+                <div className="-mx-1">{renderTree(tree)}</div>
+              ) : (
+                <p className="text-[11px] text-[#706C65] leading-relaxed">
+                  Ten dokument nie udostępnia struktury.
+                </p>
+              ))}
 
-            {openDrawer === 'styles' && (
+            {openDrawer === 'styles' && tokens && onUpdateTokens && (
               <div className="space-y-4">
                 <div
                   className={`p-2 rounded-lg border text-[10px] leading-snug ${
